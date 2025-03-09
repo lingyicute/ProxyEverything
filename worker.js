@@ -182,13 +182,15 @@ class StreamProcessor {
   async endThinkChain() {
     clearInterval(this.thinkTimer);
     this.inThinkChain = false;
-    await this.sendChunk('');
+    await this.sendChunk('</think>');
   }
 
   cleanContent(content) {
     return content
       .replace(/<icon>.*?<\/icon>/g, '')
       .replace(/```ys_think/g, '')
+      .replace(/<start>.*?<\/start>/g, '')
+      .replace(/<end>.*?<\/end>/g, '')
       .replace(/\n+/g, '\n');
   }
 
