@@ -120,26 +120,26 @@ class StreamProcessor {
     }
   }
 
-  async parseEventBlock(block) {
-    let eventType = 'message';
-    let data = '';
-    const lines = block.split('\n');
-    for (const line of lines) {
-      if (line.startsWith('event:')) {
-        eventType = line.slice(6).trim();
-      } else if (line.startsWith('data:')) {
-        data += line.slice(5).trim();
-      }
-    }
-    if (data) {
-      try {
-        const jsonData = JSON.parse(data);
-        await this.handleEvent(eventType, jsonData);
-      } catch (e) {
-        console.error('Parse error', e);
-      }
+async parseEventBlock(block) {
+  let eventType = 'message';
+  const dataLines = [];
+  const lines = block.split('\n');
+  
+  for (const line of lines) {
+    if (line.startsWith('event:')) {
+      eventType = line.slice(6).trim();
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trim()); // 收集所有data行
     }
   }
+  
+  try {
+    const jsonData = JSON.parse(dataLines.join('\n')); // 合并多行数据
+    await this.handleEvent(eventType, jsonData);
+  } catch (e) {
+    console.error('Parse error', e);
+  }
+}
 
   async handleEvent(eventType, data) {
     switch (eventType) {
