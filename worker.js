@@ -30,7 +30,7 @@ async function generateHeaders(body) {
   const signature = await crypto.subtle.sign(
     'HMAC',
     hmacKey,
-    new TextEncoder().encode(`x-date: ${xDate}\ndigest: ${digest}`)
+    new TextEncoder().encode(`x-date: ${xDate}\ndigest: ${digest}`.replace(/\r\n/g, '\n'))
   );
   
   const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)));
@@ -170,6 +170,8 @@ class StreamProcessor {
   }
   
   async startThinkChain() {
+    if (this.thinkTimer) return;
+    
     this.inThinkChain = true;
     await this.sendChunk('<think>');
     
@@ -187,10 +189,10 @@ class StreamProcessor {
 
   cleanContent(content) {
     return content
-      .replace(/<icon>.*?<\/icon>/g, '')
+      .replace(/<icon>[^]*?<\/icon>/g, '')
       .replace(/```ys_think/g, '')
-      .replace(/<start>.*?<\/start>/g, '')
-      .replace(/<end>.*?<\/end>/g, '')
+      .replace(/<start>[^]*?<\/start>/g, '')
+      .replace(/<end>[^]*?<\/end>/g, '')
       .replace(/\n+/g, '\n');
   }
 
