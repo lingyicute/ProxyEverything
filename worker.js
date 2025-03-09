@@ -15,7 +15,9 @@ async function sha256Base64(data) {
 }
 
 async function generateHeaders(body) {
-  const xDate = new Date(Date.now() + TIME_OFFSET).toUTCString();
+  const xDate = new Date(Date.now() + TIME_OFFSET)
+  .toUTCString()
+  .replace(/\r?\n/g, '');
   const digest = `SHA-256=${await sha256Base64(body)}`;
   
   // HMAC-SHA1签名
