@@ -1,371 +1,219 @@
-// 环境变量 WORKER_AUTH_KEY 用于接口鉴权
-// 环境变量 XIAOBAI_COOKIE_KEYS 需要包含有效的Bearer令牌（每行一个）
-
-const HMAC_SECRET = "TkoWuEN8cpDJubb7Zfwxln16NQDZIc8z";
-const FIXED_DEVICE_ID = "de9b27e8e4f729c55f4d4e9e0ce3c937_1741362388656_638599";
-const USER_ID = 104296504;
-const TIME_OFFSET = 0; // 根据实际情况调整时间偏移量
-
-async function sha256Base64(data) {
-  const buffer = await crypto.subtle.digest(
-    'SHA-256', 
-    new TextEncoder().encode(data)
-  );
-  return btoa(String.fromCharCode(...new Uint8Array(buffer)));
-}
-
-async function generateHeaders(body) {
-  const xDate = new Date(Date.now() + TIME_OFFSET)
-  .toUTCString()
-  .replace(/\r?\n/g, '');
-  const digest = `SHA-256=${await sha256Base64(body)}`;
-  
-  // HMAC-SHA1签名
-  const hmacKey = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(HMAC_SECRET),
-    { name: 'HMAC', hash: 'SHA-1' },
-    false,
-    ['sign']
-  );
-  
-  const signature = await crypto.subtle.sign(
-    'HMAC',
-    hmacKey,
-    new TextEncoder().encode(`x-date: ${xDate}\ndigest: ${digest}`.replace(/\r?\n/g, '\n'))
-  );
-  
-  const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)));
-
-  return {
-    'accept': 'text/event-stream',
-    'authorization': `hmac username="web.1.0.beta", algorithm="hmac-sha1", headers="x-date digest", signature="${signatureB64}"`,
-    'content-type': 'application/json',
-    'digest': digest,
-    'x-date': xDate,
-    'x-yuanshi-authorization': `Bearer ${apiKey}`,
-    'x-yuanshi-appname': 'wenxiaobai',
-    'x-yuanshi-appversioncode': '',
-    'x-yuanshi-appversionname': '3.1.0',
-    'x-yuanshi-channel': 'browser',
-    'x-yuanshi-deviceid': FIXED_DEVICE_ID,
-    'x-yuanshi-platform': 'web',
-    'origin': 'https://www.wenxiaobai.com',
-    'referer': 'https://www.wenxiaobai.com/',
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
-    'sec-ch-ua': '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"',
-    'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
-    'sec-fetch-dest': 'empty',
-    'sec-fetch-mode': 'cors',
-    'sec-fetch-site': 'same-site'
-  };
-}
-
-function buildRequestBody(openaiData) {
-  const lastMessage = openaiData.messages
-    .slice()
-    .reverse()
-    .find(m => m.role === 'user')?.content || "";
-    
-  return JSON.stringify({
-    userId: USER_ID,
-    botId: "200006",
-    botAlias: "custom",
-    query: lastMessage,
-    isRetry: false,
-    breakingStrategy: 0,
-    isNewConversation: true,
-    mediaInfos: [],
-    turnIndex: 0,
-    rewriteQuery: "",
-    capabilities: [{
-      defaultQuery: "",
-      capability: "otherBot",
-      capabilityRang: 0,
-      minAppVersion: "",
-      botId: 200004,
-      exclusiveCapabilities: null,
-      defaultSelected: false,
-      defaultHidden: false,
-      key: "deep_think",
-      defaultPlaceholder: "",
-      isPromptMenu: false,
-      promptMenu: false,
-      _id: "deep_think"
-    }],
-    attachmentInfo: { url: { infoList: [] } },
-    inputWay: "proactive",
-    pureQuery: ""
+addEventListener('fetch', event => {
+    event.respondWith(handleRequest(event.request));
   });
-}
-
-class StreamProcessor {
-  constructor(writer) {
-    this.writer = writer;
-    this.buffer = '';
-    this.inThinkChain = false;
-    this.thinkTimer = null;
-    this.openaiId = `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`;
-    this.created = Math.floor(Date.now() / 1000);
-  }
-
-  async process(chunk) {
-    this.buffer += new TextDecoder().decode(chunk);
-    let index;
-    while ((index = this.buffer.indexOf('\n\n')) >= 0) {
-      const block = this.buffer.slice(0, index);
-      this.buffer = this.buffer.slice(index + 2);
-      await this.parseEventBlock(block);
-    }
-  }
-
-async parseEventBlock(block) {
-  let eventType = 'message';
-  const dataLines = [];
-  const lines = block.split('\n');
   
-  for (const line of lines) {
-    if (line.startsWith('event:')) {
-      eventType = line.slice(6).trim();
-    } else if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trim()); // 收集所有data行
-    }
-  }
-  
-  try {
-    const jsonData = JSON.parse(dataLines.join('\n')); // 合并多行数据
-    await this.handleEvent(eventType, jsonData);
-  } catch (e) {
-    console.error('Parse error', e);
-  }
-}
-
-  async handleEvent(eventType, data) {
-    switch (eventType) {
-      case 'message':
-        await this.handleMessage(data);
-        break;
-      case 'generateEnd':
-        await this.finalize();
-        break;
-    }
-  }
-
-  async handleMessage(data) {
-    const content = data.content || '';
-    
-    // 处理思维链开始
-    if (content.includes('```ys_think') && !this.inThinkChain) {
-      await this.startThinkChain();
-    }
-    
-    // 处理思维链结束
-    if (content.includes('</end>') && this.inThinkChain) {
-      await this.endThinkChain();
-    }
-    
-    // 转发正式内容（仅在非思考链状态）
-    if (!this.inThinkChain && content) {
-      await this.sendChunk(this.cleanContent(content));
-    }
-  }
-  
-  async startThinkChain() {
-    if (this.thinkTimer) return;
-    
-    this.inThinkChain = true;
-    await this.sendChunk('<think>');
-    
-    this.thinkTimer = setInterval(async () => {
-      const char = String.fromCharCode(65 + Math.floor(Math.random() * 26));
-      await this.sendChunk(char);
-    }, 2000);
-  }
-
-  async endThinkChain() {
-    clearInterval(this.thinkTimer);
-    this.inThinkChain = false;
-    await this.sendChunk('</think>');
-  }
-
-  cleanContent(content) {
-    return content
-      .replace(/<icon>[^]*?<\/icon>/g, '')
-      .replace(/```ys_think/g, '')
-      .replace(/<start>[^]*?<\/start>/g, '')
-      .replace(/<end>[^]*?<\/end>/g, '')
-      .replace(/\n+/g, '\n');
-  }
-
-  async sendChunk(content, finish = false) {
-    const chunk = {
-      id: this.openaiId,
-      object: "chat.completion.chunk",
-      created: this.created,
-      model: "Wenxiaobai-DeepSeek-R1",
-      choices: [{
-        index: 0,
-        delta: finish ? {} : { content },
-        finish_reason: finish ? "stop" : null
-      }]
-    };
-    
-    await this.writer.write(
-      new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`)
-    );
-  }
-
-  async finalize() {
-    clearInterval(this.thinkTimer);
-    await this.sendChunk('', true);
-    await this.writer.close();
-  }
-}
-
-export default {
-  async fetch(request, env) {
-    // CORS预检处理
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
-          "Access-Control-Max-Age": "86400"
-        }
-      });
-    }
-
-    // 鉴权验证
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader || authHeader !== `Bearer ${env.WORKER_AUTH_KEY}`) {
-      return new Response(JSON.stringify({
-        error: { message: "Unauthorized", type: "auth_error" }
-      }), { 
-        status: 401,
-        headers: { 
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*" 
-        }
-      });
-    }
-
-    // 路由处理
-    const url = new URL(request.url);
-    if (url.pathname === "/v1/models") {
-      return new Response(JSON.stringify({
-        object: "list",
-        data: [{
-          id: "Wenxiaobai-DeepSeek-R1",
-          object: "model",
-          created: 1686935002,
-          owned_by: "wenxiaobai"
-        }]
-      }), {
-        headers: { 
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*" 
-        }
-      });
-    }
-
+  async function handleRequest(request) {
     try {
-      const apiKeys = (env.XIAOBAI_COOKIE_KEYS || "")
-        .split("\n")
-        .map(k => k.trim())
-        .filter(Boolean);
-
-      if (apiKeys.length === 0) {
-        throw new Error("No API keys configured");
-      }
-
-      const requestData = await request.json();
-      
-      // 顺序尝试所有密钥
-      for (const apiKey of apiKeys) {
-        try {
-          const requestBody = buildRequestBody(requestData);
-          const headers = await generateHeaders(requestBody);
-          headers['x-yuanshi-authorization'] = `Bearer ${apiKey}`;
-
-          const xbResponse = await fetch(
-            "https://api-bj.wenxiaobai.com/api/v1.0/core/conversation/chat/v1",
-            {
-              method: "POST",
-              headers: headers,
-              body: requestBody
-            }
-          );
-
-          if (!xbResponse.ok) throw new Error(`HTTP ${xbResponse.status}`);
-          
-          return requestData.stream 
-            ? this.handleStream(xbResponse) 
-            : this.handleJson(xbResponse);
-
-        } catch (error) {
-          console.error(`Key failed: ${error.message}`);
-          if (apiKey === apiKeys[apiKeys.length - 1]) throw error;
+        const url = new URL(request.url);
+  
+        // 如果访问根目录，返回HTML
+        if (url.pathname === "/") {
+            return new Response(getRootHtml(), {
+                headers: {
+                    'Content-Type': 'text/html; charset=utf-8'
+                }
+            });
         }
-      }
+  
+        // 从请求路径中提取目标 URL
+        let actualUrlStr = decodeURIComponent(url.pathname.replace("/", ""));
+  
+        // 判断用户输入的 URL 是否带有协议
+        actualUrlStr = ensureProtocol(actualUrlStr, url.protocol);
+  
+        // 保留查询参数
+        actualUrlStr += url.search;
+  
+        // 创建新 Headers 对象，排除以 'cf-' 开头的请求头
+        const newHeaders = filterHeaders(request.headers, name => !name.startsWith('cf-'));
+  
+        // 创建一个新的请求以访问目标 URL
+        const modifiedRequest = new Request(actualUrlStr, {
+            headers: newHeaders,
+            method: request.method,
+            body: request.body,
+            redirect: 'manual'
+        });
+  
+        // 发起对目标 URL 的请求
+        const response = await fetch(modifiedRequest);
+        let body = response.body;
+  
+        // 处理重定向
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+            body = response.body;
+            // 创建新的 Response 对象以修改 Location 头部
+            return handleRedirect(response, body);
+        } else if (response.headers.get("Content-Type")?.includes("text/html")) {
+            body = await handleHtmlContent(response, url.protocol, url.host, actualUrlStr);
+        }
+  
+        // 创建修改后的响应对象
+        const modifiedResponse = new Response(body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers
+        });
+  
+        // 添加禁用缓存的头部
+        setNoCacheHeaders(modifiedResponse.headers);
+  
+        // 添加 CORS 头部，允许跨域访问
+        setCorsHeaders(modifiedResponse.headers);
+  
+        return modifiedResponse;
     } catch (error) {
-      return new Response(JSON.stringify({
-        error: { message: `Starrina Proxy Error`, type: "api_error" }
-      }), { 
-        status: 500,
-        headers: { 
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*" 
-        }
-      });
+        // 如果请求目标地址时出现错误，返回带有错误消息的响应和状态码 500（服务器错误）
+        return jsonResponse({
+            error: error.message
+        }, 500);
     }
-  },
-
-  handleStream(response) {
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const processor = new StreamProcessor(writer);
-
-    (async () => {
-      const reader = response.body.getReader();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          await processor.process(new TextDecoder().decode(value));
+  }
+  
+  // 确保 URL 带有协议
+  function ensureProtocol(url, defaultProtocol) {
+    return url.startsWith("http://") || url.startsWith("https://") ? url : defaultProtocol + "//" + url;
+  }
+  
+  // 处理重定向
+  function handleRedirect(response, body) {
+    const location = new URL(response.headers.get('location'));
+    const modifiedLocation = `/${encodeURIComponent(location.toString())}`;
+    return new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: {
+            ...response.headers,
+            'Location': modifiedLocation
         }
-        await processor.finalize();
-      } catch (error) {
-        console.error('Stream Error:', error);
-        writer.abort(error);
-      }
-    })();
-
-    return new Response(readable, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Access-Control-Allow-Origin": "*"
-      }
-    });
-  },
-
-  async handleJson(response) {
-    const data = await response.json();
-    return new Response(JSON.stringify({
-      id: `chatcmpl-${crypto.randomUUID()}`,
-      object: "chat.completion",
-      created: Math.floor(Date.now() / 1000),
-      model: "Wenxiaobai-DeepSeek-R1",
-      choices: [{
-        message: { role: "assistant", content: data.content }
-      }]
-    }), {
-      headers: { 
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*" 
-      }
     });
   }
-}
+  
+  // 处理 HTML 内容中的相对路径
+  async function handleHtmlContent(response, protocol, host, actualUrlStr) {
+    const originalText = await response.text();
+    const regex = new RegExp('((href|src|action)=["\'])/(?!/)', 'g');
+    let modifiedText = replaceRelativePaths(originalText, protocol, host, new URL(actualUrlStr).origin);
+  
+    return modifiedText;
+  }
+  
+  // 替换 HTML 内容中的相对路径
+  function replaceRelativePaths(text, protocol, host, origin) {
+    const regex = new RegExp('((href|src|action)=["\'])/(?!/)', 'g');
+    return text.replace(regex, `$1${protocol}//${host}/${origin}/`);
+  }
+  
+  // 返回 JSON 格式的响应
+  function jsonResponse(data, status) {
+    return new Response(JSON.stringify(data), {
+        status: status,
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8'
+        }
+    });
+  }
+  
+  // 过滤请求头
+  function filterHeaders(headers, filterFunc) {
+    return new Headers([...headers].filter(([name]) => filterFunc(name)));
+  }
+  
+  // 设置禁用缓存的头部
+  function setNoCacheHeaders(headers) {
+    headers.set('Cache-Control', 'no-store');
+  }
+  
+  // 设置 CORS 头部
+  function setCorsHeaders(headers) {
+    headers.set('Access-Control-Allow-Origin', '*');
+    headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
+    headers.set('Access-Control-Allow-Headers', '*');
+  }
+  
+  // 返回根目录的 HTML
+  function getRootHtml() {
+    return `<!DOCTYPE html>
+  <html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css" rel="stylesheet">
+    <title>Proxy Everything</title>
+    <link rel="icon" type="image/png" href="https://92li.uk/static/img/heartface.png">
+    <meta name="Description" content="Proxy Everything.">
+    <meta property="og:description" content="Proxy Everything.">
+    <meta property="og:image" content="https://92li.uk/static/img/heartface.png">
+    <meta name="robots" content="index, follow">
+    <meta http-equiv="Content-Language" content="zh-CN">
+    <meta name="copyright" content="Copyright © lingyicute">
+    <meta name="author" content="lingyicute">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+        }
+        .background {
+            background-image: url('https://imgapi.cn/bing.php');
+            background-size: cover;
+            background-position: center;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card {
+            background-color: rgba(255, 255, 255, 0.8);
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .card:hover {
+            background-color: rgba(255, 255, 255, 1);
+            box-shadow: 0px 8px 16px rgba(0, 0, 0, 0.3);
+        }
+        .input-field input[type=text] {
+            color: #2c3e50;
+        }
+        .input-field input[type=text]:focus+label {
+            color: #2c3e50 !important;
+        }
+        .input-field input[type=text]:focus {
+            border-bottom: 1px solid #2c3e50 !important;
+            box-shadow: 0 1px 0 0 #2c3e50 !important;
+        }
+    </style>
+  </head>
+  <body>
+    <div class="background">
+        <div class="container">
+            <div class="row">
+                <div class="col s12 m8 offset-m2 l6 offset-l3">
+                    <div class="card">
+                        <div class="card-content">
+                            <span class="card-title center-align">Proxy Everything</span>
+                            <form id="urlForm" onsubmit="redirectToProxy(event)">
+                                <div class="input-field">
+                                    <input type="text" id="targetUrl" placeholder="在此输入目标地址" required>
+                                    <label for="targetUrl">目标地址</label>
+                                </div>
+                                <button type="submit" class="btn waves-effect waves-light teal darken-2 full-width">跳转</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
+    <script>
+        function redirectToProxy(event) {
+            event.preventDefault();
+            const targetUrl = document.getElementById('targetUrl').value.trim();
+            const currentOrigin = window.location.origin;
+            window.open(currentOrigin + '/' + encodeURIComponent(targetUrl), '_blank');
+        }
+    </script>
+  </body>
+  </html>`;
+  }
