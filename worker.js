@@ -1394,7 +1394,7 @@ ${md3Topbar()}
     <div class="hue-row" id="hueRow" role="radiogroup" aria-label="主题色"></div>
   </div>
 
-  <p class="t-body-sm muted footer enter d2">仅供学习与个人研究使用 · 请勿用于违反目标网站服务条款的用途</p>
+  <p class="t-body-sm muted footer enter d2">Made with ❤️ by lingyicute</p>
 </main>
 ${md3Overlays()}
 <script>${MD3_JS}
