@@ -2,9 +2,9 @@
  * ProxyEverything — 通用网页反向代理 Cloudflare Worker
  *
  * URL 方案：
- *   https://<你的worker域名>/<encodeURIComponent(目标URL的路径部分)>?目标查询串
+ *   https://proxy-any.92li.uk/<encodeURIComponent(目标URL的路径部分)>?目标查询串
  *   例：https://example.com/page?a=1
- *     → https://<worker>/https%3A%2F%2Fexample.com%2Fpage?a=1
+ *     → https://proxy-any.92li.uk/https%3A%2F%2Fexample.com%2Fpage?a=1
  *
  * 架构：单文件、ES Module 语法，无外部依赖，可直接粘贴到 Cloudflare Dashboard，
  * 或 `wrangler deploy` 部署。
@@ -143,16 +143,127 @@ function rewriteRefreshContent(content, baseUrl, workerOrigin) {
 		'url=' + rewriteUrl(u.trim().replace(/^["']|["']$/g, ''), baseUrl, workerOrigin));
 }
 
-/** 清洗 Set-Cookie：去掉 Domain/Path，使其落在 Worker 域名根路径上 */
-function cleanSetCookie(c) {
-	return c
-		.split(';')
-		.filter((part, i) => {
-			if (i === 0) return true;
-			const name = part.trim().split('=')[0].toLowerCase();
-			return name !== 'domain' && name !== 'path';
-		})
-		.join(';');
+// Cookie 站点隔离
+
+const COOKIE_PREFIX = '__pe_';
+/** 回源 Cookie 头预算：多数源站在 8K 处开始报错，留出余量 */
+const MAX_COOKIE_HEADER = 6000;
+
+/**
+ * FNV-1a 32bit。
+ * ⚠️ 浏览器端 shim 里有一份等价实现，改动时必须同步，否则
+ * document.cookie 的读写前缀会与服务端下发的不一致。
+ */
+function fnv1a32(str) {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < str.length; i++) {
+		h ^= str.charCodeAt(i);
+		h = Math.imul(h, 0x01000193) >>> 0;
+	}
+	return h >>> 0;
+}
+
+/** 目标站点 → cookie 命名空间前缀（含结尾下划线） */
+function cookieNamespace(targetUrl) {
+	const host = String(targetUrl.host || targetUrl.hostname || '').toLowerCase();
+	// 32bit 的 base36 最长 7 位，padStart 保证定长
+	return COOKIE_PREFIX + fnv1a32(host).toString(36).padStart(7, '0') + '_';
+}
+
+/**
+ * 改写上游 Set-Cookie：加命名空间前缀、强制 Path=/、去掉 Domain，
+ * 并按 Worker 自身协议修正 Secure / SameSite。
+ * 返回 null 表示这条 cookie 无效、应丢弃。
+ */
+function scopeSetCookie(c, ns, workerIsHttps) {
+	const parts = String(c).split(';');
+	const head = parts[0];
+	const eq = head.indexOf('=');
+	if (eq < 0) return null;
+	const name = head.slice(0, eq).trim();
+	if (!name) return null;
+	const value = head.slice(eq + 1);
+
+	const out = [`${ns}${name}=${value}`];
+	let sameSiteNone = false;
+	let hasSecure = false;
+
+	for (const raw of parts.slice(1)) {
+		const part = raw.trim();
+		if (!part) continue;
+		const attr = part.slice(0, part.indexOf('=') === -1 ? undefined : part.indexOf('=')).trim().toLowerCase();
+		// Domain / Path 一律由我们接管
+		if (attr === 'domain' || attr === 'path') continue;
+		if (attr === 'secure') {
+			// Worker 跑在 http 上时保留 Secure 会让浏览器直接丢弃这条 cookie
+			if (workerIsHttps) { out.push('Secure'); hasSecure = true; }
+			continue;
+		}
+		if (attr === 'samesite') {
+			const val = part.slice(part.indexOf('=') + 1).trim();
+			sameSiteNone = val.toLowerCase() === 'none';
+			if (workerIsHttps) out.push(`SameSite=${val}`);
+			continue;
+		}
+		out.push(part);
+	}
+
+	out.push('Path=/');
+	// SameSite=None 必须伴随 Secure，否则现代浏览器拒绝写入
+	if (sameSiteNone && workerIsHttps && !hasSecure) out.push('Secure');
+	return out.join('; ');
+}
+
+/** 解析 Cookie 头为 [name, value] 对；值里允许出现 '=' */
+function parseCookieHeader(header) {
+	if (!header) return [];
+	return header.split(';').map((p) => {
+		const i = p.indexOf('=');
+		if (i < 0) return null;
+		return [p.slice(0, i).trim(), p.slice(i + 1).trim()];
+	}).filter(Boolean);
+}
+
+/**
+ * 从浏览器送来的 Cookie 头里只挑出属于当前目标站点的那部分，并剥掉前缀。
+ * 其它站点的 cookie、以及 Worker 域名下无关的 cookie 都不会被转发。
+ * 超出预算时跳过后续条目，避免源站因超大请求头返回 431/502。
+ */
+function scopeRequestCookie(header, ns) {
+	const mine = parseCookieHeader(header)
+		.filter(([n]) => n.startsWith(ns))
+		.map(([n, v]) => [n.slice(ns.length), v])
+		.filter(([n]) => n);
+	const kept = [];
+	let len = 0;
+	for (const [n, v] of mine) {
+		const add = n.length + 1 + v.length + (kept.length ? 2 : 0);
+		if (len + add > MAX_COOKIE_HEADER) continue;
+		kept.push(`${n}=${v}`);
+		len += add;
+	}
+	return kept.join('; ');
+}
+
+/** 就地重写 Headers 上的全部 Set-Cookie */
+function rescopeSetCookies(headers, ns, workerIsHttps) {
+	// getSetCookie 才能拿到多条 Set-Cookie；退化成 get 时只会有一条
+	const list = headers.getSetCookie
+		? headers.getSetCookie()
+		: (headers.get('set-cookie') ? [headers.get('set-cookie')] : []);
+	if (!list.length) return;
+	headers.delete('set-cookie');
+	for (const c of list) {
+		const scoped = scopeSetCookie(c, ns, workerIsHttps);
+		if (scoped) headers.append('Set-Cookie', scoped);
+	}
+}
+
+/** 用站点作用域后的 Cookie 覆盖转发头 */
+function applyRequestCookieScope(fwdHeaders, request, ns) {
+	fwdHeaders.delete('cookie');
+	const scoped = scopeRequestCookie(request.headers.get('cookie'), ns);
+	if (scoped) fwdHeaders.set('Cookie', scoped);
 }
 
 /** 从 Content-Type 中提取 charset 标签 */
@@ -195,7 +306,7 @@ async function sniffHtmlCharset(body) {
 }
 
 /** 构造透传 Response（headers 可变），并做统一清洗 */
-function buildResponse(upstream, request) {
+function buildResponse(upstream, request, ck) {
 	const resp = new Response(upstream.body, upstream);
 	for (const h of STRIP_RESPONSE_HEADERS) resp.headers.delete(h);
 	for (const [name] of upstream.headers) {
@@ -207,12 +318,8 @@ function buildResponse(upstream, request) {
 	resp.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS');
 	resp.headers.set('Access-Control-Allow-Headers', '*');
 	resp.headers.set('Access-Control-Allow-Credentials', 'true');
-	// Set-Cookie 清洗
-	const cookies = resp.headers.getSetCookie ? resp.headers.getSetCookie() : [];
-	if (cookies.length) {
-		resp.headers.delete('set-cookie');
-		for (const c of cookies) resp.headers.append('Set-Cookie', cleanSetCookie(c));
-	}
+	// Set-Cookie 按站点隔离
+	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
 	// 防止缓存中间层缓存错误页
 	if (upstream.status >= 500) {
 		resp.headers.set('Cache-Control', 'no-store');
@@ -229,10 +336,11 @@ function isCacheableMethod(m) { return m === 'GET' || m === 'HEAD'; }
 // 让 JS 动态发起的请求（fetch/XHR/WebSocket/img.src 等）也走代理
 // ============================================================
 
-function getShimScript(workerOrigin) {
+function getShimScript(workerOrigin, cookieNs) {
 	return `<script>(function(){
 try{
 var WO=${JSON.stringify(workerOrigin)};
+var CK=${JSON.stringify(cookieNs || '')};
 var RAW=location.pathname.substring(1);
 var DEC;try{DEC=decodeURIComponent(RAW);}catch(e){DEC=RAW;}
 if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(DEC))DEC='https://'+DEC.replace(/^\\/+/,'');
@@ -381,6 +489,44 @@ if(window.Element){
     return oSA.apply(this,arguments);
   };
 }
+/* ---- document.cookie：读写都按站点命名空间转换 ----
+   服务端下发的 cookie 名带 CK 前缀；页面脚本应当只看到原始名字。 */
+try{
+if(CK){
+  var CD=Object.getOwnPropertyDescriptor(Document.prototype,'cookie')||
+         Object.getOwnPropertyDescriptor(HTMLDocument.prototype,'cookie');
+  if(CD&&CD.get&&CD.set&&CD.configurable){
+    Object.defineProperty(document,'cookie',{
+      configurable:true,enumerable:CD.enumerable,
+      get:function(){
+        var raw=CD.get.call(this)||'';
+        var out=[];
+        var parts=raw.split(';');
+        for(var i=0;i<parts.length;i++){
+          var p=parts[i].replace(/^\\s+/,'');
+          if(p.indexOf(CK)===0)out.push(p.substring(CK.length));
+        }
+        return out.join('; ');
+      },
+      set:function(v){
+        try{
+          v=String(v);
+          var i=v.indexOf('=');
+          if(i>0){
+            var nm=v.substring(0,i).replace(/^\\s+|\\s+$/g,'');
+            if(nm&&nm.indexOf(CK)!==0)v=CK+v;
+            /* 去掉站点自带的 Domain/Path —— 代理下它们指向错误的域 */
+            v=v.replace(/;\\s*domain\\s*=[^;]*/gi,'');
+            v=v.replace(/;\\s*path\\s*=[^;]*/gi,'');
+            v+='; Path=/';
+          }
+        }catch(e){}
+        return CD.set.call(this,v);
+      }
+    });
+  }
+}
+}catch(e){}
 /* ---- 表单提交兜底 ---- */
 document.addEventListener('submit',function(ev){
   try{
@@ -418,11 +564,11 @@ const HANDLERS = {
 	use:          { href: 'url', 'xlink:href': 'url' },
 };
 
-function transformHtml(response, baseUrl, workerOrigin) {
+function transformHtml(response, baseUrl, workerOrigin, ck) {
 	const rewriter = new HTMLRewriter();
 	let baseHref = baseUrl;
 	let injected = false;
-	const shim = getShimScript(workerOrigin);
+	const shim = getShimScript(workerOrigin, ck ? ck.ns : '');
 	const rw = (v) => rewriteUrl(v, baseHref, workerOrigin);
 
 	// 注入运行时 shim（head 优先，无 head 则 body 兜底）
@@ -689,7 +835,7 @@ function documentBase(targetUrl) {
 // WebSocket 代理
 // ============================================================
 
-async function handleWebSocket(request, targetUrl) {
+async function handleWebSocket(request, targetUrl, ck) {
 	// ws/wss → http/https 供 fetch 建立上游连接
 	const upstreamUrl = new URL(targetUrl.href);
 	upstreamUrl.protocol = upstreamUrl.protocol === 'ws:' ? 'http:' : 'https:';
@@ -702,6 +848,7 @@ async function handleWebSocket(request, targetUrl) {
 		headers.set(k, v);
 	}
 	headers.delete('host');
+	if (ck) applyRequestCookieScope(headers, request, ck.ns);
 	headers.set('Origin', upstreamUrl.origin);
 	headers.set('Upgrade', 'websocket');
 
@@ -778,10 +925,13 @@ export default {
 			return invalidTargetPage(url, '不允许代理本站自身');
 		}
 
+		// 本请求的 cookie 站点作用域（必须在 ws→http 协议转换前取，保持与 host 一致）
+		const ck = { ns: cookieNamespace(targetUrl), isHttps: url.protocol === 'https:' };
+
 		// WebSocket 请求走独立通道
 		if (request.headers.get('Upgrade') === 'websocket') {
 			try {
-				return await handleWebSocket(request, targetUrl);
+				return await handleWebSocket(request, targetUrl, ck);
 			} catch (e) {
 				return new Response('WebSocket 代理失败: ' + e.message, { status: 502 });
 			}
@@ -814,6 +964,8 @@ export default {
 			fwdHeaders.set('Referer', fetchUrl);
 		}
 		fwdHeaders.delete('host');
+		// Cookie 按站点隔离：只回传属于当前目标站点的那部分，并剥掉命名空间前缀
+		applyRequestCookieScope(fwdHeaders, request, ck.ns);
 
 		let upstream;
 		try {
@@ -829,7 +981,7 @@ export default {
 
 		// ---- 重定向 ----
 		if (REDIRECT_STATUS.has(upstream.status)) {
-			const resp = buildResponse(upstream, request);
+			const resp = buildResponse(upstream, request, ck);
 			const loc = upstream.headers.get('location');
 			if (loc) {
 				try {
@@ -845,7 +997,7 @@ export default {
 
 		// ---- 204 / 304 无正文 ----
 		if (upstream.status === 204 || upstream.status === 304 || request.method === 'HEAD') {
-			const resp = buildResponse(upstream, request);
+			const resp = buildResponse(upstream, request, ck);
 			return new Response(null, resp);
 		}
 
@@ -896,59 +1048,51 @@ export default {
 		// 避免 HTMLRewriter 按 meta 里的旧 charset 重新编码输出）
 		if (isHtml) {
 			const interim = makeInterim((contentType.split(';')[0] || 'text/html') + '; charset=UTF-8');
-			const result = transformHtml(interim, baseUrl, workerOrigin);
+			const result = transformHtml(interim, baseUrl, workerOrigin, ck);
 			// 补一遍统一头处理
 			result.headers.set('X-Robots-Tag', 'noindex, nofollow');
 			result.headers.set('Access-Control-Allow-Origin', '*');
 			if (!isCacheableMethod(request.method) || upstream.status >= 500) {
 				result.headers.set('Cache-Control', 'no-store');
 			}
-			const cookies = result.headers.getSetCookie ? result.headers.getSetCookie() : [];
-			if (cookies.length) {
-				result.headers.delete('set-cookie');
-				for (const c of cookies) result.headers.append('Set-Cookie', cleanSetCookie(c));
-			}
+			rescopeSetCookies(result.headers, ck.ns, ck.isHttps);
 			return result;
 		}
 
 		// CSS
 		if (contentType.includes('text/css')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'css'), upstream, request);
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'css'), upstream, request, ck);
 		}
 
 		// JS（仅重写 ES 模块说明符，幂等且只碰“像 URL”的字符串）
 		if (contentType.includes('javascript') || contentType.includes('ecmascript')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'js'), upstream, request);
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'js'), upstream, request, ck);
 		}
 
 		// SVG
 		if (contentType.includes('image/svg+xml')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'svg'), upstream, request);
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'svg'), upstream, request, ck);
 		}
 
 		// Web App Manifest（图标、start_url 等）
 		if (contentType.includes('manifest+json')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'json'), upstream, request);
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'json'), upstream, request, ck);
 		}
 
 		// 其它（JSON API/图片/字体/媒体/下载等）：流式透传
 		// 说明：JSON 内容不重写 —— 动态场景已由浏览器端 shim（fetch/XHR/属性 setter）覆盖，
 		// 直接改写 API 数据反而可能破坏业务逻辑。
-		const resp = buildResponse(upstream, request);
+		const resp = buildResponse(upstream, request, ck);
 		return resp;
 	},
 };
 
 /** transformText 的产物再补一遍统一头处理 */
-function applyCommon(resp, upstream, request) {
+function applyCommon(resp, upstream, request, ck) {
 	for (const [name] of upstream.headers) {
 		if (HOP_BY_HOP.has(name.toLowerCase())) resp.headers.delete(name);
 	}
-	const cookies = upstream.headers.getSetCookie ? upstream.headers.getSetCookie() : [];
-	if (cookies.length) {
-		resp.headers.delete('set-cookie');
-		for (const c of cookies) resp.headers.append('Set-Cookie', cleanSetCookie(c));
-	}
+	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
 	resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
 	if (!isCacheableMethod(request.method) || upstream.status >= 500) {
 		resp.headers.set('Cache-Control', 'no-store');
