@@ -99,17 +99,65 @@ function rewriteUrl(value, baseUrl, workerOrigin) {
 	}
 }
 
-/** 重写 srcset："url 1x, url 2x" / "url 320w, ..." */
+/**
+ * 重写 srcset："url 1x, url 2x" / "url 320w, ..." / "url1,url2"
+ *
+ * ⚠️ 不能简单地按 "," 切分：URL 内部允许出现逗号，最典型的就是
+ * 懒加载占位图 `data:image/gif;base64,R0lGODlhAQAB...`。粗暴切分会把
+ * base64 载荷切成两半，后半段被当成相对路径改写成代理地址，占位图直接碎图。
+ *
+ * 这里按 HTML 规范「Parsing a srcset attribute」逐段扫描，只重写 URL 部分，
+ * 描述符与空白原样保留：
+ *   https://html.spec.whatwg.org/multipage/images.html#parse-a-srcset-attribute
+ *   1. 跳过空白与逗号（候选项之间的分隔符）；
+ *   2. 取一段「非空白」字符作为 URL，逗号可以出现在其中；
+ *   3. 若这一段以逗号结尾，则末尾的逗号是分隔符，不属于 URL，
+ *      该候选项到此结束（没有描述符）；
+ *   4. 否则其后跟随描述符，直到「括号外的」逗号或字符串结束。
+ */
+function isSrcsetSpace(ch) {
+	return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f';
+}
+
 function rewriteSrcset(value, baseUrl, workerOrigin) {
-	return String(value)
-		.split(',')
-		.map(part => {
-			const seg = part.trim().split(/\s+/);
-			if (!seg.length || !seg[0]) return part;
-			seg[0] = rewriteUrl(seg[0], baseUrl, workerOrigin);
-			return seg.join(' ');
-		})
-		.join(', ');
+	const s = String(value);
+	const n = s.length;
+	let out = '';
+	let i = 0;
+	while (i < n) {
+		// 1. 分隔符：空白与逗号，原样输出
+		const sepStart = i;
+		while (i < n && (isSrcsetSpace(s[i]) || s[i] === ',')) i++;
+		out += s.slice(sepStart, i);
+		if (i >= n) break;
+
+		// 2/3. URL 段
+		const urlStart = i;
+		while (i < n && !isSrcsetSpace(s[i])) i++;
+		let url = s.slice(urlStart, i);
+		let trailing = '';
+		const m = /,+$/.exec(url);
+		if (m) {
+			trailing = m[0];
+			url = url.slice(0, url.length - trailing.length);
+		}
+		if (url) out += rewriteUrl(url, baseUrl, workerOrigin);
+		out += trailing;
+		if (trailing) continue; // 该候选项没有描述符，直接进入下一轮
+
+		// 4. 描述符段（括号内的逗号不算分隔符，兼容未来的描述符语法）
+		const descStart = i;
+		let depth = 0;
+		while (i < n) {
+			const ch = s[i];
+			if (ch === '(') depth++;
+			else if (ch === ')') { if (depth > 0) depth--; }
+			else if (ch === ',' && depth === 0) break;
+			i++;
+		}
+		out += s.slice(descStart, i);
+	}
+	return out;
 }
 
 /** 重写 CSS 文本：url(...) 与 @import */
@@ -200,7 +248,12 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 			continue;
 		}
 		if (attr === 'samesite') {
-			const val = part.slice(part.indexOf('=') + 1).trim();
+			// SameSite 必须带值；遇到 `Set-Cookie: a=b; SameSite` 这种无值写法，
+			// 直接丢弃，否则会拼出 SameSite=SameSite 这种垃圾属性
+			const eqi = part.indexOf('=');
+			if (eqi < 0) continue;
+			const val = part.slice(eqi + 1).trim();
+			if (!val) continue;
 			sameSiteNone = val.toLowerCase() === 'none';
 			if (workerIsHttps) out.push(`SameSite=${val}`);
 			continue;
@@ -305,6 +358,39 @@ async function sniffHtmlCharset(body) {
 	return { charset: m ? m[1] : null, body: b };
 }
 
+/** 往 Vary 上追加一个字段名，不覆盖上游已有的 Vary */
+function addVary(headers, field) {
+	const cur = headers.get('vary');
+	if (!cur) { headers.set('Vary', field); return; }
+	const has = cur.split(',').some(v => v.trim().toLowerCase() === field.toLowerCase());
+	if (!has) headers.set('Vary', cur + ', ' + field);
+}
+
+/**
+ * 统一放开 CORS，方便被改写的脚本跨域读取。
+ *
+ * ⚠️ 不能同时下发 `Access-Control-Allow-Origin: *` 和
+ * `Access-Control-Allow-Credentials: true`：按 Fetch 规范，带凭证
+ * （credentials: 'include'）的请求遇到通配符 Origin 会直接进入网络错误分支，
+ * 请求必然失败；`Access-Control-Allow-Headers: *` 在带凭证时同样无效。
+ * 由于本代理依赖 Cookie 维持会话，这里必须回显请求方的 Origin，
+ * 并声明 `Vary: Origin`。没有 Origin 的普通请求才退回通配符。
+ */
+function applyCors(headers, request) {
+	const origin = request && request.headers.get('origin');
+	if (origin) {
+		headers.set('Access-Control-Allow-Origin', origin);
+		headers.set('Access-Control-Allow-Credentials', 'true');
+		addVary(headers, 'Origin');
+	} else {
+		headers.set('Access-Control-Allow-Origin', '*');
+	}
+	headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS');
+	const reqHeaders = request && request.headers.get('access-control-request-headers');
+	headers.set('Access-Control-Allow-Headers', reqHeaders || '*');
+	return headers;
+}
+
 /** 构造透传 Response（headers 可变），并做统一清洗 */
 function buildResponse(upstream, request, ck) {
 	const resp = new Response(upstream.body, upstream);
@@ -313,11 +399,7 @@ function buildResponse(upstream, request, ck) {
 		if (HOP_BY_HOP.has(name.toLowerCase())) resp.headers.delete(name);
 	}
 	resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
-	// 统一放开 CORS，方便被改写的脚本跨域读取
-	resp.headers.set('Access-Control-Allow-Origin', '*');
-	resp.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS');
-	resp.headers.set('Access-Control-Allow-Headers', '*');
-	resp.headers.set('Access-Control-Allow-Credentials', 'true');
+	applyCors(resp.headers, request);
 	// Set-Cookie 按站点隔离
 	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
 	// 防止缓存中间层缓存错误页
@@ -347,7 +429,7 @@ if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(DEC))DEC='https://'+DEC.replace(/^\\/+/,''
 var hIdx=DEC.indexOf('#');if(hIdx>=0)DEC=DEC.substring(0,hIdx);
 var TARGET=DEC+location.search;
 var ABS_RE=/^[a-z][a-z0-9+.-]*:\\/\\//i;
-var SKIP_RE=/^(data:|blob:|javascript:|mailto:|tel:|sms:|about:|#|\\?)/i;
+var SKIP_RE=/^(data:|blob:|javascript:|mailto:|tel:|sms:|about:|#)/i;
 function base(){
   var b=document.querySelector('base');
   if(b){var h=b.getAttribute('href');if(h){try{return new URL(h,TARGET).href;}catch(e){}}}
@@ -448,13 +530,36 @@ function patchSetter(ctor,prop,ss){
     });
   }catch(e){}
 }
+/* 与服务端 rewriteSrcset 同一套规则：URL 内部允许出现逗号
+   （data:image/gif;base64,......），因此不能简单按 "," 切分 */
+function rwsIsW(c){return c===' '||c==='\\t'||c==='\\n'||c==='\\r'||c==='\\f';}
 function rwSrcset(v){
   if(typeof v!=='string')return v;
-  return v.split(',').map(function(p){
-    var s=p.trim().split(/\\s+/);
-    if(s.length&&s[0])s[0]=rp(s[0]);
-    return s.join(' ');
-  }).join(', ');
+  var s=v,n=s.length,out='',i=0,c,tr,m,url,ss,us,ds,d;
+  while(i<n){
+    ss=i;
+    while(i<n&&(rwsIsW(s.charAt(i))||s.charAt(i)===','))i++;
+    out+=s.substring(ss,i);
+    if(i>=n)break;
+    us=i;
+    while(i<n&&!rwsIsW(s.charAt(i)))i++;
+    url=s.substring(us,i);tr='';
+    m=/,+$/.exec(url);
+    if(m){tr=m[0];url=url.substring(0,url.length-tr.length);}
+    if(url)out+=rp(url);
+    out+=tr;
+    if(tr)continue;
+    ds=i;d=0;
+    while(i<n){
+      c=s.charAt(i);
+      if(c==='(')d++;
+      else if(c===')'){if(d>0)d--;}
+      else if(c===','&&d===0)break;
+      i++;
+    }
+    out+=s.substring(ds,i);
+  }
+  return out;
 }
 var I=window.HTMLImageElement;
 patchSetter(I,'src');patchSetter(I,'srcset',1);
@@ -650,6 +755,16 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 	// 通配：style 属性、懒加载 data-* 属性
 	rewriter.on('*', {
 		element(el) {
+			// 兜底注入：源文档既没有 <head> 也没有 <body> 起始标签时
+			// （XHR 拉回的 HTML 片段、<frameset> 老页面等），上面的两个 handler
+			// 都不会触发，shim 就丢了。这里插到文档第一个非容器元素之前，
+			// 保证它仍然先于页面自身脚本执行。
+			const tag = (el.tagName || '').toLowerCase();
+			if (!injected && tag !== 'html' && tag !== 'head' && tag !== 'body') {
+				injected = true;
+				el.before(shim, { html: true });
+			}
+
 			const st = el.getAttribute('style');
 			if (st && /url\s*\(/i.test(st)) {
 				el.setAttribute('style', rewriteStyleAttr(st, baseHref, workerOrigin));
@@ -673,7 +788,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 // CSS / JS / SVG / JSON / Manifest 文本重写（整体缓冲）
 // ============================================================
 
-async function transformText(response, baseUrl, workerOrigin, kind) {
+async function transformText(response, baseUrl, workerOrigin, kind, request) {
 	let text = await response.text();
 	try {
 		if (kind === 'css') {
@@ -694,7 +809,7 @@ async function transformText(response, baseUrl, workerOrigin, kind) {
 	const ct = (response.headers.get('content-type') || '').split(';')[0];
 	resp.headers.set('content-type', (ct || 'text/plain') + '; charset=UTF-8');
 	resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
-	resp.headers.set('Access-Control-Allow-Origin', '*');
+	applyCors(resp.headers, request);
 	return resp;
 }
 
@@ -774,17 +889,17 @@ function rewriteJsonUrls(text, baseUrl, workerOrigin) {
 		/"((?:https?:)?\/\/[^"\s\\]*(?:\\.[^"\s\\]*)*|\/[^"\s\\]*(?:\\.[^"\s\\]*)*)"/g,
 		(m, v) => {
 			if (v.includes(workerOrigin)) return m;
-			// 协议相对 URL
-			let candidate = v;
-			if (candidate.startsWith('//')) candidate = 'https:' + candidate;
+			// 正则已锚定在引号之间：v 只可能以 "/"、"//" 或 "http(s)://" 开头，
+			// 相对 baseUrl 解析后 scheme 恒为 http/https，无需再过滤不可代理的 scheme
 			let abs;
-			try { abs = new URL(candidate, baseUrl); } catch { return m; }
-			const isSameOrigin = abs.origin === baseOrigin;
-			const isRootPath = v.startsWith('/') && !v.startsWith('//');
-			if (!isSameOrigin && !isRootPath) return m;
-			// 跳过明显的 API 路径参数值（带查询的仍重写，交给服务端处理）
-			const r = toProxyUrl(abs.href, workerOrigin);
-			return `"${r}"`;
+			try { abs = new URL(v, baseUrl); } catch { return m; }
+			const isProtocolRelative = v.startsWith('//');
+			const isRootPath = v.startsWith('/') && !isProtocolRelative;
+			// 同源绝对 URL、根相对路径、协议相对 URL 都要走代理：
+			// 后两者在代理页面里会被浏览器按 Worker 自己的源解析，必然取到错误地址
+			// （协议相对 URL 继承的是「目标站」的协议，不是 Worker 的协议）
+			if (abs.origin !== baseOrigin && !isRootPath && !isProtocolRelative) return m;
+			return `"${toProxyUrl(abs.href, workerOrigin)}"`;
 		}
 	);
 }
@@ -891,16 +1006,9 @@ export default {
 
 		// ---- CORS 预检 ----
 		if (request.method === 'OPTIONS' && request.headers.has('access-control-request-method')) {
-			return new Response(null, {
-				status: 204,
-				headers: {
-					'Access-Control-Allow-Origin': '*',
-					'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS',
-					'Access-Control-Allow-Headers': '*',
-					'Access-Control-Allow-Credentials': 'true',
-					'Access-Control-Max-Age': '86400',
-				},
-			});
+			const headers = new Headers({ 'Access-Control-Max-Age': '86400' });
+			applyCors(headers, request);
+			return new Response(null, { status: 204, headers });
 		}
 
 		// ---- 首页 ----
@@ -1051,7 +1159,7 @@ export default {
 			const result = transformHtml(interim, baseUrl, workerOrigin, ck);
 			// 补一遍统一头处理
 			result.headers.set('X-Robots-Tag', 'noindex, nofollow');
-			result.headers.set('Access-Control-Allow-Origin', '*');
+			applyCors(result.headers, request);
 			if (!isCacheableMethod(request.method) || upstream.status >= 500) {
 				result.headers.set('Cache-Control', 'no-store');
 			}
@@ -1061,22 +1169,22 @@ export default {
 
 		// CSS
 		if (contentType.includes('text/css')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'css'), upstream, request, ck);
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'css', request), upstream, request, ck);
 		}
 
 		// JS（仅重写 ES 模块说明符，幂等且只碰“像 URL”的字符串）
 		if (contentType.includes('javascript') || contentType.includes('ecmascript')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'js'), upstream, request, ck);
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'js', request), upstream, request, ck);
 		}
 
 		// SVG
 		if (contentType.includes('image/svg+xml')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'svg'), upstream, request, ck);
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'svg', request), upstream, request, ck);
 		}
 
 		// Web App Manifest（图标、start_url 等）
 		if (contentType.includes('manifest+json')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'json'), upstream, request, ck);
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'json', request), upstream, request, ck);
 		}
 
 		// 其它（JSON API/图片/字体/媒体/下载等）：流式透传
