@@ -58,6 +58,14 @@ const LAZY_ATTRS = [
 	'data-low-res-src',
 ];
 
+/**
+ * 是否对被代理的目标网页添加 X-Robots-Tag: noindex, nofollow
+ * - true（推荐）：仅工具自身首页被搜索引擎收录，代理的外部网页不被收录，
+ *   防止搜索引擎爬虫抓取全网导致 Worker 额度耗尽以及域名被判定为镜像站/垃圾站。
+ * - false：完全取消被代理网页的 noindex 头。
+ */
+const ENABLE_PROXY_NOINDEX = true;
+
 /** 安全 decodeURIComponent：源串含非法 % 序列时原样返回 */
 function safeDecode(s) {
 	try { return decodeURIComponent(s); } catch { return s; }
@@ -398,7 +406,9 @@ function buildResponse(upstream, request, ck) {
 	for (const [name] of upstream.headers) {
 		if (HOP_BY_HOP.has(name.toLowerCase())) resp.headers.delete(name);
 	}
-	resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
+	if (ENABLE_PROXY_NOINDEX) {
+		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
+	}
 	applyCors(resp.headers, request);
 	// Set-Cookie 按站点隔离
 	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
@@ -808,7 +818,9 @@ async function transformText(response, baseUrl, workerOrigin, kind, request) {
 	resp.headers.delete('content-encoding');
 	const ct = (response.headers.get('content-type') || '').split(';')[0];
 	resp.headers.set('content-type', (ct || 'text/plain') + '; charset=UTF-8');
-	resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
+	if (ENABLE_PROXY_NOINDEX) {
+		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
+	}
 	applyCors(resp.headers, request);
 	return resp;
 }
@@ -1018,8 +1030,26 @@ export default {
 			});
 		}
 
+		// ---- robots.txt：允许收录首页，禁止抓取代理目标路径以防耗尽 Worker 配额 ----
+		if (url.pathname === '/robots.txt') {
+			return new Response(
+`User-agent: *
+Allow: /
+Disallow: /http:
+Disallow: /https:
+Disallow: /http%3A
+Disallow: /https%3A
+Disallow: /ws:
+Disallow: /wss:
+Disallow: /ws%3A
+Disallow: /wss%3A
+`,
+				{ headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=86400' } }
+			);
+		}
+
 		// ---- favicon 等杂项，避免被当成目标域名 ----
-		if (/^\/(favicon\.ico|robots\.txt|sitemap\.xml|apple-touch-icon.*\.png|\.well-known\/.*)$/i.test(url.pathname)) {
+		if (/^\/(favicon\.ico|sitemap\.xml|apple-touch-icon.*\.png|\.well-known\/.*)$/i.test(url.pathname)) {
 			return new Response(null, { status: 404 });
 		}
 
@@ -1158,7 +1188,9 @@ export default {
 			const interim = makeInterim((contentType.split(';')[0] || 'text/html') + '; charset=UTF-8');
 			const result = transformHtml(interim, baseUrl, workerOrigin, ck);
 			// 补一遍统一头处理
-			result.headers.set('X-Robots-Tag', 'noindex, nofollow');
+			if (ENABLE_PROXY_NOINDEX) {
+				result.headers.set('X-Robots-Tag', 'noindex, nofollow');
+			}
 			applyCors(result.headers, request);
 			if (!isCacheableMethod(request.method) || upstream.status >= 500) {
 				result.headers.set('Cache-Control', 'no-store');
@@ -1201,7 +1233,9 @@ function applyCommon(resp, upstream, request, ck) {
 		if (HOP_BY_HOP.has(name.toLowerCase())) resp.headers.delete(name);
 	}
 	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
-	resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
+	if (ENABLE_PROXY_NOINDEX) {
+		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
+	}
 	if (!isCacheableMethod(request.method) || upstream.status >= 500) {
 		resp.headers.set('Cache-Control', 'no-store');
 	}
@@ -1562,7 +1596,7 @@ if(row){
 })();`;
 
 // ---- 页面骨架公共部分 ----
-function md3Head(title, desc) {
+function md3Head(title, desc, robots = 'index, follow') {
 	return `<!DOCTYPE html>
 <html lang="zh-CN" data-theme="light">
 <head>
@@ -1570,8 +1604,7 @@ function md3Head(title, desc) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
 <meta name="description" content="${escapeHtml(desc)}">
-<meta name="robots" content="noindex,nofollow">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
+${robots ? `<meta name="robots" content="${escapeHtml(robots)}">\n` : ''}<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
 <script>${MD3_THEME_EARLY}</script>
 <style>${MD3_CSS}</style>
 </head>`;
@@ -1686,7 +1719,7 @@ ${md3Overlays()}
 
 // ---- 错误页 ----
 function renderErrorPage(title, message) {
-	return md3Head(title + ' · ProxyEverything', 'ProxyEverything 错误提示') + `
+	return md3Head(title + ' · ProxyEverything', 'ProxyEverything 错误提示', 'noindex, nofollow') + `
 <body>
 <div class="err-wrap">
   <section class="card dialog enter" role="alertdialog" aria-labelledby="errTitle">
