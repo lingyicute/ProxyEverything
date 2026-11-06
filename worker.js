@@ -2338,18 +2338,41 @@ ${md3Overlays()}
   form.addEventListener('submit',function(e){
     e.preventDefault();
     var v=input.value.trim();
-    if(!/^(https?:\\/\\/)/i.test(v))v='https://'+v.replace(/^\\/+/,'');
+    if(/^[a-z][a-z0-9+.-]*:\\/\\//i.test(v)&&!/^https?:\\/\\//i.test(v)){
+      window.__peSnack('仅支持 http:// 或 https:// 网址');
+      input.focus();
+      return;
+    }
+    if(!/^https?:\\/\\//i.test(v))v='https://'+v.replace(/^\\/+/,'');
     var u=null;
     try{u=new URL(v);}catch(_){}
-    var h=u&&u.hostname?u.hostname.toLowerCase().replace(/\\.+$/,''):'';
-    if(!h||h.charAt(0)==='.'||h.indexOf('..')>=0||h.indexOf('.')<0){
+    var rawH=u&&u.hostname?u.hostname.toLowerCase():'';
+    var h=rawH.replace(/\\.+$/,'');
+    if(u&&h){try{u.hostname=h;h=u.hostname.toLowerCase().replace(/\\.+$/,'');}catch(_){u=null;}}
+    if(!u||u.username||u.password||!h||rawH.charAt(0)==='.'||rawH.indexOf('..')>=0||h.indexOf('.')<0){
       window.__peSnack('请输入有效的网址，例如 example.com');
       input.focus();
       return;
     }
+    if(/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(h)||h.charAt(0)==='['||h==='localhost'||/\\.(localhost|local|internal)$/.test(h)){
+      window.__peSnack('不允许代理 IP 字面量或本地目标名称');
+      input.focus();
+      return;
+    }
+    var selfH=location.hostname.toLowerCase().replace(/\\.+$/,'');
+    var nextHref='/'+encodeURIComponent(u.protocol+'//'+u.host+u.pathname)+u.search+u.hash;
+    if(h===selfH&&u.port===location.port){
+      if(/^\\/(https?|wss?)(?:%3A|:)(?:%2F|\\/){2}/i.test(u.pathname)){
+        nextHref=u.pathname+u.search+u.hash;
+      }else{
+        window.__peSnack('不允许代理本站自身');
+        input.focus();
+        return;
+      }
+    }
     window.__peBusy(true);
     setTimeout(function(){
-      location.href='/'+encodeURIComponent(u.protocol+'//'+u.host+u.pathname)+u.search+u.hash;
+      location.href=nextHref;
     },260);
   });
 })();
