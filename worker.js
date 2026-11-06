@@ -710,7 +710,7 @@ var DEC;try{DEC=decodeURIComponent(RAW);}catch(e){DEC=RAW;}
 if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(DEC))DEC='https://'+DEC.replace(/^\\/+/,'');
 var hIdx=DEC.indexOf('#');if(hIdx>=0)DEC=DEC.substring(0,hIdx);
 var full=DEC+(location.search?(DEC.indexOf('?')>=0?'&':'?')+location.search.substring(1):'');
-try{var u=new URL(full);u.hostname=u.hostname.toLowerCase().replace(/\\.+$/,'');return u.href;}catch(e){return full;}
+try{var u=new URL(full);if(u.protocol==='ws:')u.protocol='http:';else if(u.protocol==='wss:')u.protocol='https:';u.username='';u.password='';u.hostname=u.hostname.toLowerCase().replace(/\\.+$/,'');return u.href;}catch(e){return full;}
 }
 var TARGET=currentTarget();
 var ABS_RE=/^[a-z][a-z0-9+.-]*:\\/\\//i;
@@ -719,7 +719,7 @@ var PROXY_RE=/^\\/(https?|wss?)(?:%3A|:)(?:%2F|\\/){2}/i;
 function base(){
   var target=currentTarget();
   var b=document.querySelector('base[data-pe-base],base[href]');
-  if(b){var h=b.getAttribute('data-pe-base')||b.getAttribute('href');if(h){try{return new URL(h,target).href;}catch(e){}}}
+  if(b){var h=b.getAttribute('data-pe-base')||b.getAttribute('href');if(h){try{var u=new URL(h,target);if(u.protocol==='http:'||u.protocol==='https:')return u.href;}catch(e){}}}
   return target;
 }
 function rp(v){
@@ -736,8 +736,13 @@ function rp(v){
     if(s===WO)s='/';
     else if(ABS_RE.test(s)||s.indexOf('//')===0){
       var pu=new URL(s,WO);
-      if(pu.host===location.host){
-        if(PROXY_RE.test(pu.pathname))return s.indexOf('//')===0?pu.href:s;
+      var puH=pu.hostname.toLowerCase().replace(/\\.+$/,'');
+      var locH=(location.hostname||'').toLowerCase().replace(/\\.+$/,'');
+      if(puH&&puH===locH&&pu.port===(location.port||'')){
+        if(PROXY_RE.test(pu.pathname)){
+          if(pu.hostname!==location.hostname){pu.hostname=location.hostname;return pu.href;}
+          return s.indexOf('//')===0?pu.href:s;
+        }
         if(pu.protocol==='ws:'||pu.protocol==='wss:')forcedWs=pu.protocol;
         s=pu.pathname+pu.search+pu.hash;
       }
@@ -747,6 +752,8 @@ function rp(v){
   if(abs.indexOf(WO+'/')===0&&PROXY_RE.test(abs.substring(WO.length)))return abs;
   if(ABS_RE.test(abs)){
     var u;try{u=new URL(abs);}catch(e){return s;}
+    var uh=u.hostname.toLowerCase().replace(/\\.+$/,'');
+    if(uh){try{u.hostname=uh;}catch(e){}}
     var p=forcedWs?(u.protocol==='http:'?'ws:':'wss:'):u.protocol;
     if(p!=='http:'&&p!=='https:'&&p!=='ws:'&&p!=='wss:')return s;
     return WO+'/'+encodeURIComponent(p+'//'+u.host+u.pathname)+u.search+u.hash;
@@ -755,14 +762,24 @@ function rp(v){
 }
 function rwUrlArg(a){
   if(typeof a==='string')return rp(a);
-  if(a instanceof URL)return new URL(rp(a.href),location.href);
+  if(a instanceof URL)return new URL(rp(a.href),location.href||WO);
   return a;
+}
+function rwInit(init){
+  if(!init||typeof init!=='object')return init;
+  var ref=init.referrer;
+  if(typeof ref==='string'&&ref&&ref!=='about:client'){
+    var nr=rp(ref);
+    if(nr&&nr!==ref)return Object.assign({},init,{referrer:nr});
+  }
+  return init;
 }
 window.__PE__={get target(){return currentTarget();},rp:rp};
 /* Request 必须在浏览器把相对地址解析到代理域之前改写；流式/POST Request 重建时需声明 duplex: 'half'，
    且 ReadableStream 正文在 Fetch 规范下不允许与 keepalive: true 或 mode: 'no-cors' 并存。 */
 var oRequest=window.Request;
 function rwReq(input,init){
+  init=rwInit(init);
   var nu=rp(input.url);
   if(!nu||nu===input.url)return init!==undefined?new oRequest(input,init):input;
   var r=init!==undefined?new oRequest(input,init):input;
@@ -782,6 +799,7 @@ function rwReq(input,init){
 if(oRequest){
   var ProxyRequest=function(input,init){
     if(!new.target)throw new TypeError('Request requires new');
+    init=rwInit(init);
     if(input&&typeof input==='object'&&'url'in input)return rwReq(input,init);
     input=rwUrlArg(input);
     return Reflect.construct(oRequest,[input,init],new.target);
@@ -794,6 +812,7 @@ if(oRequest){
 var of_=window.fetch;
 if(of_)window.fetch=function(input,init){
   try{
+    init=rwInit(init);
     if(typeof input==='string')input=rp(input);
     else if(input instanceof URL)input=rp(input.href);
     else if(input&&typeof input==='object'&&'url'in input&&oRequest){input=rwReq(input,init);init=undefined;}
@@ -823,8 +842,8 @@ if(window.WebSocket){
       if(typeof u==='string')nu=rp(u);
       else if(u instanceof URL)nu=rp(u.href);
       if(typeof nu==='string'&&!/^wss?:\\/\\//i.test(nu)){
-        var au=new URL(nu,location.href);
-        if(au.origin===location.origin)au.protocol=location.protocol==='https:'?'wss:':'ws:';
+        var au=new URL(nu,location.href||WO);
+        if(au.origin===WO||au.origin===location.origin)au.protocol=(location.protocol||au.protocol)==='https:'?'wss:':'ws:';
         nu=au.href;
       }
     }catch(e){}
@@ -844,6 +863,11 @@ if(oWo)window.open=function(u){try{arguments[0]=rwUrlArg(u);}catch(e){}return oW
 try{var oAs=location.assign.bind(location);location.assign=function(u){return oAs(rp(u));};}catch(e){}
 try{var oRe=location.replace.bind(location);location.replace=function(u){return oRe(rp(u));};}catch(e){}
 /* ---- DOM 属性 setter 拦截：img.src = "..." 等动态赋值 ---- */
+function rwPing(v){
+  if(typeof v!=='string')return v;
+  var t=v.trim();
+  return t?t.split(/\\s+/).map(rp).join(' '):v;
+}
 function patchSetter(ctor,prop,ss){
   try{
     if(!ctor||!ctor.prototype)return;
@@ -852,7 +876,7 @@ function patchSetter(ctor,prop,ss){
     var orig=d.set;
     Object.defineProperty(ctor.prototype,prop,{
       configurable:true,enumerable:d.enumerable,get:d.get,
-      set:function(v){try{v=ss?rwSrcset(v):rwUrlArg(v);}catch(e){}return orig.call(this,v);}
+      set:function(v){try{v=ss===1?rwSrcset(v):ss===2?rwPing(v):rwUrlArg(v);}catch(e){}return orig.call(this,v);}
     });
   }catch(e){}
 }
@@ -893,8 +917,8 @@ patchSetter(window.HTMLScriptElement,'src');
 patchSetter(window.HTMLIFrameElement,'src');
 patchSetter(window.HTMLFrameElement,'src');
 patchSetter(window.HTMLLinkElement,'href');patchSetter(window.HTMLLinkElement,'imageSrcset',1);
-patchSetter(window.HTMLAnchorElement,'href');
-patchSetter(window.HTMLAreaElement,'href');
+patchSetter(window.HTMLAnchorElement,'href');patchSetter(window.HTMLAnchorElement,'ping',2);
+patchSetter(window.HTMLAreaElement,'href');patchSetter(window.HTMLAreaElement,'ping',2);
 patchSetter(window.HTMLSourceElement,'src');patchSetter(window.HTMLSourceElement,'srcset',1);
 patchSetter(window.HTMLMediaElement,'src');
 patchSetter(window.HTMLVideoElement,'poster');
@@ -905,6 +929,17 @@ patchSetter(window.HTMLInputElement,'src');
 patchSetter(window.HTMLInputElement,'formAction');
 patchSetter(window.HTMLButtonElement,'formAction');
 patchSetter(window.HTMLTrackElement,'src');
+[window.HTMLScriptElement,window.HTMLLinkElement].forEach(function(C){
+  try{
+    if(!C||!C.prototype)return;
+    var d=Object.getOwnPropertyDescriptor(C.prototype,'integrity');
+    if(d&&d.configurable)Object.defineProperty(C.prototype,'integrity',{
+      configurable:true,enumerable:d.enumerable,
+      get:function(){return '';},
+      set:function(){try{this.removeAttribute('integrity');}catch(e){}}
+    });
+  }catch(e){}
+});
 try{
   if(window.HTMLBaseElement&&window.HTMLBaseElement.prototype){
     var bd=Object.getOwnPropertyDescriptor(HTMLBaseElement.prototype,'href');
@@ -917,26 +952,32 @@ try{
     }
   }
 }catch(e){}
-/* setAttribute / setAttributeNS 兜底（src/srcset/imagesrcset/action/formaction/poster/data/href/xlink:href） */
-var ATTRS={src:0,srcset:1,imagesrcset:1,action:0,formaction:0,poster:0,data:0,href:0,'xlink:href':0};
+/* setAttribute / setAttributeNS 兜底（src/srcset/imagesrcset/action/formaction/poster/data/href/xlink:href/ping） */
+var ATTRS={src:0,srcset:1,imagesrcset:1,action:0,formaction:0,poster:0,data:0,href:0,'xlink:href':0,ping:2};
 var HREF_TAGS={A:1,LINK:1,AREA:1,SCRIPT:1,IMAGE:1,USE:1,FEIMAGE:1,MPATH:1,TEXTPATH:1,PATTERN:1,FILTER:1,LINEARGRADIENT:1,RADIALGRADIENT:1};
 if(window.Element){
   var oSA=Element.prototype.setAttribute;
+  var oRA=Element.prototype.removeAttribute;
   Element.prototype.setAttribute=function(n,v){
     try{
       if(typeof n==='string'&&v!=null){
         var ln=n.toLowerCase();
         var sv=v instanceof URL?v.href:String(v);
         var tag=(this.tagName||'').toUpperCase();
+        if(ln==='integrity'&&(tag==='SCRIPT'||tag==='LINK')){
+          if(oRA)oRA.call(this,'integrity');
+          return;
+        }
         if(ln==='href'&&tag==='BASE'){
-          var bUrl=new URL(sv,currentTarget()).href;
-          oSA.call(this,'data-pe-base',bUrl);
-          this.removeAttribute('href');
+          var bUrl=new URL(sv,currentTarget());
+          if(bUrl.protocol==='http:'||bUrl.protocol==='https:')oSA.call(this,'data-pe-base',bUrl.href);
+          else if(oRA)oRA.call(this,'data-pe-base');
+          if(oRA)oRA.call(this,'href');
           return;
         }
         if(Object.prototype.hasOwnProperty.call(ATTRS,ln)){
-          if(ln!=='href'||HREF_TAGS[tag]){
-            arguments[1]=ATTRS[ln]?rwSrcset(sv):rp(sv);
+          if((ln!=='href'||HREF_TAGS[tag])&&(ln!=='ping'||tag==='A'||tag==='AREA')){
+            arguments[1]=ATTRS[ln]===1?rwSrcset(sv):ATTRS[ln]===2?rwPing(sv):rp(sv);
           }
         }
       }
@@ -951,12 +992,32 @@ if(window.Element){
         var local=ln.indexOf(':')>=0?ln.split(':')[1]:ln;
         var sv=v instanceof URL?v.href:String(v);
         var tag=(this.tagName||'').toUpperCase();
-        if((Object.prototype.hasOwnProperty.call(ATTRS,ln)||local==='href')&&(local!=='href'||HREF_TAGS[tag])){
-          arguments[2]=ATTRS[ln]?rwSrcset(sv):rp(sv);
+        if(local==='integrity'&&(tag==='SCRIPT'||tag==='LINK')){
+          if(oRA)oRA.call(this,'integrity');
+          return;
+        }
+        if(local==='href'&&tag==='BASE'){
+          var bUrl=new URL(sv,currentTarget());
+          if(bUrl.protocol==='http:'||bUrl.protocol==='https:')oSA.call(this,'data-pe-base',bUrl.href);
+          else if(oRA)oRA.call(this,'data-pe-base');
+          if(oRA)oRA.call(this,'href');
+          return;
+        }
+        var kind=Object.prototype.hasOwnProperty.call(ATTRS,local)?ATTRS[local]:ATTRS[ln];
+        if(kind!==undefined&&(local!=='href'||HREF_TAGS[tag])&&(local!=='ping'||tag==='A'||tag==='AREA')){
+          arguments[2]=kind===1?rwSrcset(sv):kind===2?rwPing(sv):rp(sv);
         }
       }
     }catch(e){}
     return oSANS.apply(this,arguments);
+  };
+  if(oRA)Element.prototype.removeAttribute=function(n){
+    try{
+      if(typeof n==='string'&&n.toLowerCase()==='href'&&(this.tagName||'').toUpperCase()==='BASE'){
+        oRA.call(this,'data-pe-base');
+      }
+    }catch(e){}
+    return oRA.apply(this,arguments);
   };
 }
 /* ---- document.cookie：读写都按站点命名空间转换 ----
@@ -991,7 +1052,7 @@ if(CK){
   }
 }
 }catch(e){}
-/* ---- 链接点击与表单提交兜底（覆盖 innerHTML 动态插入节点） ---- */
+/* ---- 链接点击与表单提交兜底（覆盖 innerHTML 动态插入节点与编程式 submit） ---- */
 function rwLinkEv(ev){
   try{
     var el=ev.target&&ev.target.closest?ev.target.closest('a,area'):null;
@@ -1000,14 +1061,15 @@ function rwLinkEv(ev){
     if(h!==null){var p=rp(h||base());if(p&&p!==h)el.setAttribute('href',p);}
     var xh=el.getAttribute('xlink:href');
     if(xh){var px=rp(xh);if(px&&px!==xh)el.setAttribute('xlink:href',px);}
+    var pg=el.getAttribute('ping');
+    if(pg){var ppg=rwPing(pg);if(ppg&&ppg!==pg)el.setAttribute('ping',ppg);}
   }catch(e){}
 }
 document.addEventListener('click',rwLinkEv,true);
 document.addEventListener('auxclick',rwLinkEv,true);
 document.addEventListener('contextmenu',rwLinkEv,true);
-document.addEventListener('submit',function(ev){
+function rwForm(f,sub){
   try{
-    var f=ev.target;
     if(!f||(f.tagName||'').toUpperCase()!=='FORM')return;
     var m=(f.getAttribute('method')||'').toLowerCase();
     var a=f.getAttribute('action');
@@ -1015,13 +1077,19 @@ document.addEventListener('submit',function(ev){
     else if(m!=='dialog'&&(a===''||document.querySelector('base[data-pe-base],base[href]'))){
       f.setAttribute('action',rp(base()));
     }
-    var sub=ev.submitter;
     if(sub&&sub.getAttribute){
       var fa=sub.getAttribute('formaction');
       if(fa){var pfa=rp(fa);if(pfa&&pfa!==fa)sub.setAttribute('formaction',pfa);}
     }
   }catch(e){}
-},true);
+}
+document.addEventListener('submit',function(ev){rwForm(ev.target,ev.submitter);},true);
+if(window.HTMLFormElement&&HTMLFormElement.prototype){
+  var oSub=HTMLFormElement.prototype.submit;
+  if(oSub)HTMLFormElement.prototype.submit=function(){rwForm(this,null);return oSub.apply(this,arguments);};
+  var oRSub=HTMLFormElement.prototype.requestSubmit;
+  if(oRSub)HTMLFormElement.prototype.requestSubmit=function(sub){rwForm(this,sub);return oRSub.apply(this,arguments);};
+}
 }catch(e){try{console.error('[ProxyEverything] shim error',e);}catch(_){}}
 })();</script>`;
 }
@@ -2463,7 +2531,13 @@ ${md3Overlays()}
   form.addEventListener('submit',function(e){
     e.preventDefault();
     var v=input.value.trim();
-    if(/^[a-z][a-z0-9+.-]*:\\/\\//i.test(v)&&!/^https?:\\/\\//i.test(v)){
+    if(/^(?:\\/+)?(?:https?|wss?)%3A%2F%2F/i.test(v)){
+      var qIdx=v.search(/[?#]/);
+      var pPart=qIdx>=0?v.slice(0,qIdx):v;
+      var sPart=qIdx>=0?v.slice(qIdx):'';
+      try{v=decodeURIComponent(pPart.replace(/^\\/+/,''))+sPart;}catch(_){}
+    }
+    if(/^[a-z][a-z0-9+.-]*:/i.test(v)&&!/^https?:\\/\\//i.test(v)&&!/^[a-z0-9.-]+:\\d+(?:[/?#]|$)/i.test(v)){
       window.__peSnack('仅支持 http:// 或 https:// 网址');
       input.focus();
       return;
