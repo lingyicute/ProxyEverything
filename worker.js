@@ -54,12 +54,24 @@ const TRANSFORMED_HEADERS = [
 const MAX_TRANSFORM_BYTES = 2 * 1024 * 1024;
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 
+// 禁止 Connection 头夹带并借机剥除端到端关键语义头（RFC 9110 §7.6.1）
+const PROTECTED_END_TO_END = new Set([
+	'content-type', 'content-length', 'content-encoding', 'content-range',
+	'set-cookie', 'cookie', 'location', 'cache-control', 'vary',
+	'host', 'origin', 'referer', 'x-robots-tag', 'sec-websocket-protocol',
+	'access-control-allow-origin', 'access-control-allow-credentials',
+	'access-control-allow-methods', 'access-control-allow-headers',
+	'access-control-max-age',
+]);
+
 /** Connection 可以声明额外的逐跳头，不能只删除固定列表。 */
 function stripHopByHop(headers) {
 	const connection = headers.get('connection') || '';
 	for (const name of connection.split(',')) {
-		const token = name.trim();
-		if (/^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(token)) headers.delete(token);
+		const token = name.trim().toLowerCase();
+		if (/^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(token) && !PROTECTED_END_TO_END.has(token)) {
+			headers.delete(token);
+		}
 	}
 	for (const name of HOP_BY_HOP) headers.delete(name);
 }
@@ -407,8 +419,9 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 			if (eqi < 0) continue;
 			const val = part.slice(eqi + 1).trim();
 			if (!val) continue;
-			sameSiteNone = sameSiteNone || val.toLowerCase() === 'none';
-			if (workerIsHttps) out.push(`SameSite=${val}`);
+			const isNone = val.toLowerCase() === 'none';
+			sameSiteNone = sameSiteNone || isNone;
+			if (!isNone || workerIsHttps) out.push(`SameSite=${val}`);
 			continue;
 		}
 		out.push(part);
@@ -472,14 +485,33 @@ function applyRequestCookieScope(fwdHeaders, request, ns) {
 	if (scoped) fwdHeaders.set('Cookie', scoped);
 }
 
-/** 从 Content-Type 中提取 charset 标签 */
-function getCharset(contentType) {
-	const m = /charset\s*=\s*"?([\w\-:.]+)"?/i.exec(contentType || '');
-	return m ? m[1].toLowerCase() : null;
-}
-
 function isUtf8Charset(cs) {
 	return !cs || cs === 'utf-8' || cs === 'utf8' || cs === 'unicode-1-1-utf-8';
+}
+
+/** 校验并规范化编码标签；不受 TextDecoder 支持的非法标签返回 null */
+function normalizeCharsetLabel(label, fromMetaOrCss = false) {
+	if (!label) return null;
+	let cs = String(label).trim().toLowerCase();
+	if (!cs) return null;
+	if (fromMetaOrCss) {
+		// HTML / CSS 规范：meta 或 @charset 声明的 UTF-16 视为 UTF-8，x-user-defined 视为 windows-1252。
+		if (/^utf-16(?:le|be)?$/.test(cs)) cs = 'utf-8';
+		else if (cs === 'x-user-defined') cs = 'windows-1252';
+	}
+	if (isUtf8Charset(cs)) return 'utf-8';
+	try {
+		new TextDecoder(cs);
+		return cs;
+	} catch {
+		return null;
+	}
+}
+
+/** 从 Content-Type 中提取受支持的 charset 标签（非法标签忽略以便回退嗅探） */
+function getCharset(contentType) {
+	const m = /charset\s*=\s*["']?([\w\-:.]+)["']?/i.exec(contentType || '');
+	return m ? normalizeCharsetLabel(m[1], false) : null;
 }
 
 /**
@@ -508,15 +540,12 @@ async function sniffHtmlCharset(body, declaredCharset = null) {
 			if (declaredCharset) break;
 			// 剥除 HTML 注释后再扫描 meta，避免被注释掉的旧版编码声明误导。
 			const text = new TextDecoder().decode(head.subarray(0, total)).replace(/<!--[\s\S]*?(?:-->|$)/g, '');
-			// 不把分片边界处尚未闭合的属性值当成完整编码名。
+			// 不把分片边界处尚未闭合的属性值当成完整编码名；忽略不受支持的编码名继续扫描。
 			for (const [tag] of text.matchAll(/<meta\b[^>]{0,300}>/gi)) {
 				const m = /\bcharset\s*=\s*["']?\s*([a-z0-9_\-:.]+)(?=[\s"'/>;])/i.exec(tag);
 				if (m) {
-					charset = m[1].toLowerCase();
-					// HTML 规范：meta 声明的 UTF-16 视为 UTF-8，x-user-defined 视为 windows-1252。
-					if (/^utf-16(?:le|be)?$/.test(charset)) charset = 'utf-8';
-					else if (charset === 'x-user-defined') charset = 'windows-1252';
-					break;
+					const valid = normalizeCharsetLabel(m[1], true);
+					if (valid) { charset = valid; break; }
 				}
 			}
 			if (charset) break;
@@ -999,7 +1028,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			}
 			if (he === 'content-type') {
 				const c = el.getAttribute('content');
-				if (c) el.setAttribute('content', c.replace(/charset=[^;]*/i, 'charset=UTF-8'));
+				if (c) el.setAttribute('content', c.replace(/charset\s*=\s*[^;]*/i, 'charset=UTF-8'));
 			}
 			if (el.getAttribute('charset') != null) {
 				el.setAttribute('charset', 'UTF-8');
@@ -1076,7 +1105,27 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
  * 限制整体缓冲的解码后输入量；不信任 Content-Length（可缺失/虚报）。
  * 超过 2 MiB 上限时不再抛错返回 502 HTML，而是把已读分片与剩余流无缝拼接后流式透传。
  */
-async function readTransformText(body) {
+function sniffTextChunkCharset(chunks, kind) {
+	const head = new Uint8Array(128);
+	let total = 0;
+	for (const c of chunks) {
+		const sub = c.subarray(0, head.length - total);
+		head.set(sub, total);
+		total += sub.length;
+		if (total >= head.length) break;
+	}
+	if (total >= 2 && head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
+	if (total >= 2 && head[0] === 0xfe && head[1] === 0xff) return 'utf-16be';
+	if (total >= 3 && head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) return 'utf-8';
+	if (kind === 'css' && total >= 12) {
+		const ascii = new TextDecoder().decode(head.subarray(0, total));
+		const m = /^@charset\s+"([^"]{1,64})";/i.exec(ascii);
+		if (m) return normalizeCharsetLabel(m[1], true) || 'utf-8';
+	}
+	return 'utf-8';
+}
+
+async function readTransformText(body, kind = '') {
 	if (!body) return { text: '', passthrough: null };
 	const reader = body.getReader();
 	const chunks = [];
@@ -1113,7 +1162,7 @@ async function readTransformText(body) {
 			}
 			chunks.push(value);
 		}
-		const decoder = new TextDecoder();
+		const decoder = new TextDecoder(sniffTextChunkCharset(chunks, kind));
 		const parts = [];
 		for (const c of chunks) parts.push(decoder.decode(c, { stream: true }));
 		parts.push(decoder.decode());
@@ -1129,13 +1178,13 @@ async function readTransformText(body) {
 }
 
 async function transformText(response, baseUrl, workerOrigin, kind, request) {
-	const { text: rawText, passthrough } = await readTransformText(response.body);
+	const { text: rawText, passthrough } = await readTransformText(response.body, kind);
 	let bodyOut = passthrough;
 	if (bodyOut === null) {
 		let text = rawText;
 		try {
 			if (kind === 'css') {
-				text = rewriteCss(text, baseUrl, workerOrigin);
+				text = rewriteCss(text, baseUrl, workerOrigin).replace(/^@charset\s+"[^"]*";/i, '@charset "UTF-8";');
 			} else if (kind === 'js') {
 				text = rewriteJsModuleSpecifiers(text, baseUrl, workerOrigin);
 			} else if (kind === 'svg') {
@@ -1346,6 +1395,12 @@ function parseTarget(url) {
 	let u;
 	try { u = new URL(target); } catch { return null; }
 	if (!['http:', 'https:', 'ws:', 'wss:'].includes(u.protocol)) return null;
+	const rawHost = u.hostname;
+	if (!rawHost || rawHost.startsWith('.') || rawHost.includes('..')) return null;
+	const strippedHost = normalizeHostname(rawHost);
+	if (!strippedHost) return null;
+	// 就地规范化 hostname（使带尾点的缩写/十六进制/八进制 IPv4 被 URL 标准解析器展开）
+	try { u.hostname = strippedHost; } catch { return null; }
 	const host = normalizeHostname(u.hostname);
 	if (!host || host.startsWith('.') || host.includes('..') ||
 		(!host.includes('.') && host !== 'localhost')) return null;
@@ -1362,6 +1417,7 @@ function targetPolicyError(targetUrl, env) {
 	const target = new URL(targetUrl.href);
 	if (target.protocol === 'ws:') target.protocol = 'http:';
 	if (target.protocol === 'wss:') target.protocol = 'https:';
+	try { target.hostname = normalizeHostname(target.hostname); } catch {}
 	const host = normalizeHostname(target.hostname);
 	if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.startsWith('[') ||
 		host === 'localhost' || /\.(localhost|local|internal)$/.test(host)) {
@@ -1375,6 +1431,7 @@ function targetPolicyError(targetUrl, env) {
 			const u = new URL(value.trim());
 			if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password ||
 				u.pathname !== '/' || u.search || u.hash) throw new Error();
+			u.hostname = normalizeHostname(u.hostname);
 			return u.origin;
 		});
 		if (!origins.includes(target.origin)) return { status: 403, message: '目标来源不在允许列表中' };
@@ -1389,11 +1446,27 @@ function documentBase(targetUrl) {
 	return targetUrl.href;
 }
 
+/** 重写转发请求中的 Referer 头，避免将代理域名泄露给源站 */
+function resolveUpstreamReferer(request, workerOrigin, fallbackUrl) {
+	const referer = request.headers.get('referer');
+	if (!referer) return fallbackUrl;
+	try {
+		const rUrl = new URL(referer);
+		const rTarget = rUrl.origin === workerOrigin ? parseTarget(rUrl) : null;
+		if (rTarget) {
+			if (rTarget.protocol === 'ws:') rTarget.protocol = 'http:';
+			else if (rTarget.protocol === 'wss:') rTarget.protocol = 'https:';
+			return rTarget.href;
+		}
+	} catch {}
+	return fallbackUrl;
+}
+
 // ============================================================
 // WebSocket 代理
 // ============================================================
 
-async function handleWebSocket(request, targetUrl, ck) {
+async function handleWebSocket(request, targetUrl, ck, workerOrigin) {
 	// ws/wss → http/https 供 fetch 建立上游连接
 	const upstreamUrl = new URL(targetUrl.href);
 	if (upstreamUrl.protocol === 'ws:') upstreamUrl.protocol = 'http:';
@@ -1403,13 +1476,16 @@ async function handleWebSocket(request, targetUrl, ck) {
 	const headers = new Headers();
 	for (const [k, v] of request.headers) {
 		const lk = k.toLowerCase();
-		if (lk.startsWith('cf-')) continue;
+		if (lk.startsWith('cf-') || lk === 'x-forwarded-host' || lk === 'x-forwarded-server') continue;
 		headers.set(k, v);
 	}
 	stripHopByHop(headers);
 	headers.delete('host');
 	if (ck) applyRequestCookieScope(headers, request, ck.ns);
 	headers.set('Origin', upstreamUrl.origin);
+	if (headers.has('referer')) {
+		headers.set('Referer', resolveUpstreamReferer(request, workerOrigin, upstreamUrl.href));
+	}
 	headers.set('Connection', 'Upgrade');
 	headers.set('Upgrade', 'websocket');
 
@@ -1539,7 +1615,7 @@ Disallow: /wss%3A
 		// WebSocket 请求走独立通道
 		if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
 			try {
-				return await handleWebSocket(request, targetUrl, ck);
+				return await handleWebSocket(request, targetUrl, ck, workerOrigin);
 			} catch (e) {
 				return new Response('WebSocket 代理失败: ' + e.message, { status: 502 });
 			}
@@ -1554,24 +1630,13 @@ Disallow: /wss%3A
 		const fwdHeaders = new Headers();
 		for (const [k, v] of request.headers) {
 			const lk = k.toLowerCase();
-			if (lk.startsWith('cf-')) continue;
+			if (lk.startsWith('cf-') || lk === 'x-forwarded-host' || lk === 'x-forwarded-server') continue;
 			fwdHeaders.set(k, v);
 		}
 		stripHopByHop(fwdHeaders);
 		// 伪装成直连访问：重写 Origin / Referer
 		fwdHeaders.set('Origin', targetUrl.origin);
-		const referer = request.headers.get('referer');
-		if (referer) {
-			try {
-				const rUrl = new URL(referer);
-				const rTarget = rUrl.origin === workerOrigin ? parseTarget(rUrl) : null;
-				fwdHeaders.set('Referer', rTarget ? rTarget.href : fetchUrl);
-			} catch {
-				fwdHeaders.set('Referer', fetchUrl);
-			}
-		} else {
-			fwdHeaders.set('Referer', fetchUrl);
-		}
+		fwdHeaders.set('Referer', resolveUpstreamReferer(request, workerOrigin, fetchUrl));
 		fwdHeaders.delete('host');
 		// Cookie 按站点隔离：只回传属于当前目标站点的那部分，并剥掉命名空间前缀
 		applyRequestCookieScope(fwdHeaders, request, ck.ns);
