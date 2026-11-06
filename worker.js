@@ -395,6 +395,11 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 			if (workerIsHttps) { out.push('Secure'); hasSecure = true; }
 			continue;
 		}
+		if (attr === 'partitioned') {
+			// CHIPS Partitioned 属性同样要求 Secure，HTTP 下必须剥除
+			if (workerIsHttps) { out.push('Partitioned'); sameSiteNone = true; }
+			continue;
+		}
 		if (attr === 'samesite') {
 			// SameSite 必须带值；遇到 `Set-Cookie: a=b; SameSite` 这种无值写法，
 			// 直接丢弃，否则会拼出 SameSite=SameSite 这种垃圾属性
@@ -402,7 +407,7 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 			if (eqi < 0) continue;
 			const val = part.slice(eqi + 1).trim();
 			if (!val) continue;
-			sameSiteNone = val.toLowerCase() === 'none';
+			sameSiteNone = sameSiteNone || val.toLowerCase() === 'none';
 			if (workerIsHttps) out.push(`SameSite=${val}`);
 			continue;
 		}
@@ -410,7 +415,7 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 	}
 
 	out.push('Path=/');
-	// SameSite=None 必须伴随 Secure，否则现代浏览器拒绝写入
+	// SameSite=None / Partitioned 必须伴随 Secure，否则现代浏览器拒绝写入
 	if (sameSiteNone && workerIsHttps && !hasSecure) out.push('Secure');
 	return out.join('; ');
 }
@@ -434,7 +439,7 @@ function scopeRequestCookie(header, ns) {
 	const mine = parseCookieHeader(header)
 		.filter(([n]) => n.startsWith(ns))
 		.map(([n, v]) => [n.slice(ns.length), v])
-		.filter(([n]) => n);
+		.filter(([n]) => /^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(n));
 	const kept = [];
 	let len = 0;
 	for (const [n, v] of mine) {
@@ -836,7 +841,10 @@ if(CK){
         var parts=raw.split(';');
         for(var i=0;i<parts.length;i++){
           var p=parts[i].replace(/^\\s+/,'');
-          if(p.indexOf(CK)===0)out.push(p.substring(CK.length));
+          if(p.indexOf(CK)===0){
+            var rest=p.substring(CK.length);
+            if(rest.indexOf('=')>0)out.push(rest);
+          }
         }
         return out.join('; ');
       },
@@ -1402,6 +1410,7 @@ async function handleWebSocket(request, targetUrl, ck) {
 	headers.delete('host');
 	if (ck) applyRequestCookieScope(headers, request, ck.ns);
 	headers.set('Origin', upstreamUrl.origin);
+	headers.set('Connection', 'Upgrade');
 	headers.set('Upgrade', 'websocket');
 
 	// 自动跟随重定向可能把手工转发的 Cookie 带到另一个站点。
@@ -1426,12 +1435,12 @@ async function handleWebSocket(request, targetUrl, ck) {
 			try { to.send(ev.data); } catch {}
 		});
 		from.addEventListener('close', ev => {
-			// 1005/1006/1015 是状态标记，不允许写入关闭帧。
+			// 1005/1006/1015 是状态标记，不允许写入关闭帧；若状态码或超长 reason 被拒绝则回退 1000 关闭对端。
 			const code = ev.code === 1005 ? 1000 : [1006, 1015].includes(ev.code) ? 1011 : ev.code;
-			try { to.close(code, ev.reason); } catch {}
+			try { to.close(code, ev.reason); } catch { try { to.close(1000); } catch {} }
 		});
 		from.addEventListener('error', () => {
-			try { to.close(1011, 'upstream error'); } catch {}
+			try { to.close(1011, 'upstream error'); } catch { try { to.close(1000); } catch {} }
 		});
 	};
 	pipe(upstream, client);
@@ -1992,7 +2001,8 @@ try{
   root.setAttribute('data-theme',dark?'dark':'light');
   var h=null;
   try{h=localStorage.getItem('pe-hue');}catch(e){}
-  if(h){root.style.setProperty('--hue',h);root.style.setProperty('--hue3',String((parseFloat(h)+60)%360));}
+  var hn=parseFloat(h);
+  if(Number.isFinite(hn)){root.style.setProperty('--hue',String(hn));root.style.setProperty('--hue3',String((hn+60)%360));}
 }catch(e){}
 })();`;
 
@@ -2036,10 +2046,11 @@ window.__peSnack=function(msg){
   clearTimeout(snackT);
   snackT=setTimeout(function(){el.classList.remove('show');},4000);
 };
-/* 加载态 */
+/* 加载态（含 bfcache 返回时自动复位遮罩） */
 window.__peBusy=function(on){
   var el=$('busy');if(el)el.classList.toggle('show',!!on);
 };
+window.addEventListener('pageshow',function(){window.__peBusy(false);});
 /* 种子色（Material You 动态色） */
 var HUES=[285,250,200,155,35,330];
 var row=$('hueRow');
@@ -2170,7 +2181,8 @@ ${md3Overlays()}
     if(!/^(https?:\\/\\/)/i.test(v))v='https://'+v.replace(/^\\/+/,'');
     var u=null;
     try{u=new URL(v);}catch(_){}
-    if(!u||!u.hostname||u.hostname.indexOf('.')<0&&u.hostname!=='localhost'){
+    var h=u&&u.hostname?u.hostname.toLowerCase().replace(/\\.+$/,''):'';
+    if(!h||h.charAt(0)==='.'||h.indexOf('..')>=0||h.indexOf('.')<0){
       window.__peSnack('请输入有效的网址，例如 example.com');
       input.focus();
       return;
