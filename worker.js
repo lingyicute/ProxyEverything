@@ -637,12 +637,13 @@ var RAW=location.pathname.substring(1);
 var DEC;try{DEC=decodeURIComponent(RAW);}catch(e){DEC=RAW;}
 if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(DEC))DEC='https://'+DEC.replace(/^\\/+/,'');
 var hIdx=DEC.indexOf('#');if(hIdx>=0)DEC=DEC.substring(0,hIdx);
-return DEC+(location.search?(DEC.indexOf('?')>=0?'&':'?')+location.search.substring(1):'');
+var full=DEC+(location.search?(DEC.indexOf('?')>=0?'&':'?')+location.search.substring(1):'');
+try{var u=new URL(full);u.hostname=u.hostname.toLowerCase().replace(/\\.+$/,'');return u.href;}catch(e){return full;}
 }
 var TARGET=currentTarget();
 var ABS_RE=/^[a-z][a-z0-9+.-]*:\\/\\//i;
 var SKIP_RE=/^(data:|blob:|javascript:|mailto:|tel:|sms:|about:|#)/i;
-var PROXY_RE=/^\\/(https?|wss?)(?:%3A%2F%2F|:\\/\\/)/i;
+var PROXY_RE=/^\\/(https?|wss?)(?:%3A|:)(?:%2F|\\/){2}/i;
 function base(){
   var target=currentTarget();
   var b=document.querySelector('base[data-pe-base],base[href]');
@@ -658,17 +659,23 @@ function rp(v){
   var s=String(v).trim();
   if(!s||SKIP_RE.test(s))return s;
   if(PROXY_RE.test(s))return s;
-  if(s===WO)s='/';
-  else if(s.indexOf(WO+'/')===0){
-    var rest=s.substring(WO.length);
-    if(PROXY_RE.test(rest))return s;
-    s=rest;
-  }
+  var forcedWs='';
+  try{
+    if(s===WO)s='/';
+    else if(ABS_RE.test(s)||s.indexOf('//')===0){
+      var pu=new URL(s,WO);
+      if(pu.host===location.host){
+        if(PROXY_RE.test(pu.pathname))return s.indexOf('//')===0?pu.href:s;
+        if(pu.protocol==='ws:'||pu.protocol==='wss:')forcedWs=pu.protocol;
+        s=pu.pathname+pu.search+pu.hash;
+      }
+    }
+  }catch(e){}
   var abs;try{abs=new URL(s,base()).href;}catch(e){return s;}
   if(abs.indexOf(WO+'/')===0&&PROXY_RE.test(abs.substring(WO.length)))return abs;
   if(ABS_RE.test(abs)){
     var u;try{u=new URL(abs);}catch(e){return s;}
-    var p=u.protocol;
+    var p=forcedWs?(u.protocol==='http:'?'ws:':'wss:'):u.protocol;
     if(p!=='http:'&&p!=='https:'&&p!=='ws:'&&p!=='wss:')return s;
     return WO+'/'+encodeURIComponent(p+'//'+u.host+u.pathname)+u.search+u.hash;
   }
@@ -676,24 +683,27 @@ function rp(v){
 }
 function rwUrlArg(a){
   if(typeof a==='string')return rp(a);
-  if(a instanceof URL)return new URL(rp(a.href));
+  if(a instanceof URL)return new URL(rp(a.href),location.href);
   return a;
 }
-window.__PE__={target:TARGET,rp:rp};
-/* Request 必须在浏览器把相对地址解析到代理域之前改写；流式/POST Request 重建时需声明 duplex: 'half'。 */
+window.__PE__={get target(){return currentTarget();},rp:rp};
+/* Request 必须在浏览器把相对地址解析到代理域之前改写；流式/POST Request 重建时需声明 duplex: 'half'，
+   且 ReadableStream 正文在 Fetch 规范下不允许与 keepalive: true 或 mode: 'no-cors' 并存。 */
 var oRequest=window.Request;
 function rwReq(input,init){
   var nu=rp(input.url);
   if(!nu||nu===input.url)return init!==undefined?new oRequest(input,init):input;
   var r=init!==undefined?new oRequest(input,init):input;
   var m=r.method||'GET';
+  var b=m!=='GET'&&m!=='HEAD'?r.body:undefined;
+  var md=r.mode==='navigate'||(b&&r.mode==='no-cors')?'same-origin':r.mode;
   return new oRequest(nu,{
     method:m,headers:r.headers,
-    body:m!=='GET'&&m!=='HEAD'?r.body:undefined,
-    mode:r.mode==='navigate'?'same-origin':r.mode,
+    body:b,
+    mode:md,
     credentials:r.credentials,cache:r.cache,redirect:r.redirect,
     referrer:r.referrer,referrerPolicy:r.referrerPolicy,
-    integrity:r.integrity,keepalive:r.keepalive,signal:r.signal,
+    integrity:r.integrity,keepalive:b?false:r.keepalive,signal:r.signal,
     duplex:'half'
   });
 }
@@ -714,7 +724,7 @@ if(of_)window.fetch=function(input,init){
   try{
     if(typeof input==='string')input=rp(input);
     else if(input instanceof URL)input=rp(input.href);
-    else if(input&&typeof input==='object'&&'url'in input&&oRequest)input=rwReq(input);
+    else if(input&&typeof input==='object'&&'url'in input&&oRequest){input=rwReq(input,init);init=undefined;}
   }catch(e){}
   return of_.call(this,input,init);
 };
@@ -724,11 +734,12 @@ XMLHttpRequest.prototype.open=function(m,u){
   try{arguments[1]=rwUrlArg(u);}catch(e){}
   return oOpen.apply(this,arguments);
 };
-/* ---- EventSource / sendBeacon / WebSocket ---- */
-if(window.EventSource){var oES=window.EventSource;window.EventSource=function(u,c){return new oES(rwUrlArg(u),c);};window.EventSource.prototype=oES.prototype;}
+/* ---- EventSource / sendBeacon / Worker / Audio / WebSocket ---- */
+if(window.EventSource){var oES=window.EventSource;var ES=function(u,c){return new oES(rwUrlArg(u),c);};ES.prototype=oES.prototype;try{Object.setPrototypeOf(ES,oES);}catch(e){}window.EventSource=ES;}
 if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{u=rp(u);}catch(e){}return oSB(u,d);};}
-if(window.Worker){var oWk=window.Worker;window.Worker=function(u,o){return new oWk(rp(u),o);};window.Worker.prototype=oWk.prototype;}
-try{if(window.SharedWorker){var oSW=window.SharedWorker;window.SharedWorker=function(u,o){return new oSW(rp(u),o);};window.SharedWorker.prototype=oSW.prototype;}}catch(e){}
+if(window.Worker){var oWk=window.Worker;var Wk=function(u,o){return new oWk(rp(u),o);};Wk.prototype=oWk.prototype;try{Object.setPrototypeOf(Wk,oWk);}catch(e){}window.Worker=Wk;}
+try{if(window.SharedWorker){var oSW=window.SharedWorker;var SW=function(u,o){return new oSW(rp(u),o);};SW.prototype=oSW.prototype;try{Object.setPrototypeOf(SW,oSW);}catch(e){}window.SharedWorker=SW;}}catch(e){}
+try{if(window.Audio){var oAu=window.Audio;var Au=function(u){return arguments.length?new oAu(rp(u)):new oAu();};Au.prototype=oAu.prototype;try{Object.setPrototypeOf(Au,oAu);}catch(e){}window.Audio=Au;}}catch(e){}
 /* Service Worker 无法在代理路径下正确工作，直接禁用注册以免站点异常 */
 try{if(navigator.serviceWorker)navigator.serviceWorker.register=function(){return Promise.reject(new Error('[ProxyEverything] service worker disabled'));};}catch(e){}
 /* ---- WebSocket：目标地址已在路径内，无需污染目标查询串 ---- */
@@ -748,6 +759,7 @@ if(window.WebSocket){
     return protos===undefined?new oWS(nu):new oWS(nu,protos);
   };
   WS.prototype=oWS.prototype;
+  try{Object.setPrototypeOf(WS,oWS);}catch(e){}
   ['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k,i){try{WS[k]=i;}catch(e){}});
   window.WebSocket=WS;
 }
@@ -833,9 +845,9 @@ try{
     }
   }
 }catch(e){}
-/* setAttribute 兜底（src/srcset/imagesrcset/action/formaction/poster/data/href/xlink:href） */
+/* setAttribute / setAttributeNS 兜底（src/srcset/imagesrcset/action/formaction/poster/data/href/xlink:href） */
 var ATTRS={src:0,srcset:1,imagesrcset:1,action:0,formaction:0,poster:0,data:0,href:0,'xlink:href':0};
-var HREF_TAGS={A:1,LINK:1,AREA:1,IMAGE:1,USE:1,FEIMAGE:1,MPATH:1,TEXTPATH:1};
+var HREF_TAGS={A:1,LINK:1,AREA:1,SCRIPT:1,IMAGE:1,USE:1,FEIMAGE:1,MPATH:1,TEXTPATH:1,PATTERN:1,FILTER:1,LINEARGRADIENT:1,RADIALGRADIENT:1};
 if(window.Element){
   var oSA=Element.prototype.setAttribute;
   Element.prototype.setAttribute=function(n,v){
@@ -858,6 +870,21 @@ if(window.Element){
       }
     }catch(e){}
     return oSA.apply(this,arguments);
+  };
+  var oSANS=Element.prototype.setAttributeNS;
+  if(oSANS)Element.prototype.setAttributeNS=function(ns,n,v){
+    try{
+      if(typeof n==='string'&&v!=null){
+        var ln=n.toLowerCase();
+        var local=ln.indexOf(':')>=0?ln.split(':')[1]:ln;
+        var sv=v instanceof URL?v.href:String(v);
+        var tag=(this.tagName||'').toUpperCase();
+        if((Object.prototype.hasOwnProperty.call(ATTRS,ln)||local==='href')&&(local!=='href'||HREF_TAGS[tag])){
+          arguments[2]=ATTRS[ln]?rwSrcset(sv):rp(sv);
+        }
+      }
+    }catch(e){}
+    return oSANS.apply(this,arguments);
   };
 }
 /* ---- document.cookie：读写都按站点命名空间转换 ----
@@ -895,20 +922,27 @@ if(CK){
 /* ---- 链接点击与表单提交兜底（覆盖 innerHTML 动态插入节点） ---- */
 function rwLinkEv(ev){
   try{
-    var el=ev.target&&ev.target.closest?ev.target.closest('a[href],area[href]'):null;
+    var el=ev.target&&ev.target.closest?ev.target.closest('a,area'):null;
     if(!el)return;
     var h=el.getAttribute('href');
-    if(h){var p=rp(h);if(p&&p!==h)el.setAttribute('href',p);}
+    if(h!==null){var p=rp(h||base());if(p&&p!==h)el.setAttribute('href',p);}
+    var xh=el.getAttribute('xlink:href');
+    if(xh){var px=rp(xh);if(px&&px!==xh)el.setAttribute('xlink:href',px);}
   }catch(e){}
 }
 document.addEventListener('click',rwLinkEv,true);
 document.addEventListener('auxclick',rwLinkEv,true);
+document.addEventListener('contextmenu',rwLinkEv,true);
 document.addEventListener('submit',function(ev){
   try{
     var f=ev.target;
-    if(!f||f.tagName!=='FORM')return;
+    if(!f||(f.tagName||'').toUpperCase()!=='FORM')return;
+    var m=(f.getAttribute('method')||'').toLowerCase();
     var a=f.getAttribute('action');
     if(a){var p=rp(a);if(p&&p!==a)f.setAttribute('action',p);}
+    else if(m!=='dialog'&&(a===''||document.querySelector('base[data-pe-base],base[href]'))){
+      f.setAttribute('action',rp(base()));
+    }
     var sub=ev.submitter;
     if(sub&&sub.getAttribute){
       var fa=sub.getAttribute('formaction');
