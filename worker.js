@@ -197,6 +197,11 @@ function quoteCssString(value) {
 		ch === '"' || ch === '\\' ? '\\' + ch : '\\' + ch.charCodeAt(0).toString(16) + ' ') + '"';
 }
 
+/** CSS 规范：反斜杠后紧跟换行或 EOF 不是有效标识符转义（仅字符串内为续行）。 */
+function isValidCssEscape(css, index) {
+	return css[index] === '\\' && index + 1 < css.length && !/[\n\r\f]/.test(css[index + 1]);
+}
+
 /** CSS escape 的终点；最多读取 6 位十六进制数字和一个空白。 */
 function cssEscapeEnd(css, start) {
 	let i = start + 1;
@@ -247,12 +252,13 @@ function skipCssSpace(css, start, comments = false) {
 
 /** url( 的内容；无效 token 也一次跳过，禁止从每个字符重新回溯。 */
 function readCssUrl(css, start) {
-	let i = skipCssSpace(css, start);
+	let i = skipCssSpace(css, start, true);
 	if (css[i] === '"' || css[i] === "'") {
 		const str = readCssString(css, i);
-		i = skipCssSpace(css, str.end);
+		i = skipCssSpace(css, str.end, true);
 		if (str.value !== null && css[i] === ')') return { end: i + 1, value: str.value };
 	} else {
+		i = skipCssSpace(css, start);
 		const valueStart = i;
 		while (i < css.length) {
 			if (css[i] === ')') return { end: i + 1, value: decodeCssEscapes(css.slice(valueStart, i)) };
@@ -264,13 +270,13 @@ function readCssUrl(css, start) {
 			}
 			if (/["'(\x00-\x08\x0b\x0e-\x1f\x7f]/.test(css[i])) break;
 			if (css[i] === '\\') {
-				if (i + 1 === css.length || /[\n\r\f]/.test(css[i + 1])) break;
+				if (!isValidCssEscape(css, i)) break;
 				i = cssEscapeEnd(css, i);
 			} else i++;
 		}
 	}
 	// Consume the remnants of a bad URL, honoring escaped closing parentheses.
-	while (i < css.length && css[i] !== ')') i = css[i] === '\\' ? cssEscapeEnd(css, i) : i + 1;
+	while (i < css.length && css[i] !== ')') i = isValidCssEscape(css, i) ? cssEscapeEnd(css, i) : i + 1;
 	return { end: Math.min(i + 1, css.length), value: null };
 }
 
@@ -298,7 +304,7 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 		const start = i;
 		const prefix = source[i] === '@' || source[i] === '#' ? source[i++] : '';
 		const nameStart = i;
-		while (isName(source[i]) || source[i] === '\\') {
+		while (isName(source[i]) || isValidCssEscape(source, i)) {
 			i = source[i] === '\\' ? cssEscapeEnd(source, i) : i + 1;
 		}
 		if (i === nameStart) { i = Math.max(i, start + 1); continue; }
@@ -485,14 +491,16 @@ async function sniffHtmlCharset(body, declaredCharset = null) {
 			if (total < 3) continue;
 			if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) { charset = 'utf-8'; break; }
 			if (declaredCharset) break;
-			const text = new TextDecoder().decode(head.subarray(0, total));
+			// 剥除 HTML 注释后再扫描 meta，避免被注释掉的旧版编码声明误导。
+			const text = new TextDecoder().decode(head.subarray(0, total)).replace(/<!--[\s\S]*?(?:-->|$)/g, '');
 			// 不把分片边界处尚未闭合的属性值当成完整编码名。
 			for (const [tag] of text.matchAll(/<meta\b[^>]{0,300}>/gi)) {
 				const m = /\bcharset\s*=\s*["']?\s*([a-z0-9_\-:.]+)(?=[\s"'/>;])/i.exec(tag);
 				if (m) {
 					charset = m[1].toLowerCase();
-					// HTML meta 不能把无 BOM 的文档切换为 UTF-16。
+					// HTML 规范：meta 声明的 UTF-16 视为 UTF-8，x-user-defined 视为 windows-1252。
 					if (/^utf-16(?:le|be)?$/.test(charset)) charset = 'utf-8';
+					else if (charset === 'x-user-defined') charset = 'windows-1252';
 					break;
 				}
 			}
@@ -973,46 +981,82 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 // CSS / JS / SVG / JSON / Manifest 文本重写（整体缓冲）
 // ============================================================
 
-/** 限制整体缓冲的解码后输入量；不信任 Content-Length（可缺失/虚报）。 */
+/**
+ * 限制整体缓冲的解码后输入量；不信任 Content-Length（可缺失/虚报）。
+ * 超过 2 MiB 上限时不再抛错返回 502 HTML，而是把已读分片与剩余流无缝拼接后流式透传。
+ */
 async function readTransformText(body) {
-	if (!body) return '';
+	if (!body) return { text: '', passthrough: null };
 	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	const parts = [];
+	const chunks = [];
 	let bytes = 0;
+	let handedOff = false;
 	try {
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
 			bytes += value.byteLength;
-			if (bytes > MAX_TRANSFORM_BYTES) throw new Error('文本资源超过 2 MiB 改写上限');
-			parts.push(decoder.decode(value, { stream: true }));
+			if (bytes > MAX_TRANSFORM_BYTES) {
+				handedOff = true;
+				const passthrough = new ReadableStream({
+					start(controller) {
+						for (const c of chunks) controller.enqueue(c);
+						chunks.length = 0;
+						controller.enqueue(value);
+					},
+					async pull(controller) {
+						const next = await reader.read();
+						if (next.done) {
+							reader.releaseLock();
+							controller.close();
+						} else {
+							controller.enqueue(next.value);
+						}
+					},
+					cancel(reason) {
+						reader.cancel(reason).catch(() => {});
+						try { reader.releaseLock(); } catch {}
+					},
+				});
+				return { text: null, passthrough };
+			}
+			chunks.push(value);
 		}
+		const decoder = new TextDecoder();
+		const parts = [];
+		for (const c of chunks) parts.push(decoder.decode(c, { stream: true }));
 		parts.push(decoder.decode());
-		return parts.join('');
+		return { text: parts.join(''), passthrough: null };
 	} catch (error) {
 		reader.cancel(error).catch(() => {});
 		throw error;
 	} finally {
-		reader.releaseLock();
+		if (!handedOff) {
+			try { reader.releaseLock(); } catch {}
+		}
 	}
 }
 
 async function transformText(response, baseUrl, workerOrigin, kind, request) {
-	let text = await readTransformText(response.body);
-	try {
-		if (kind === 'css') {
-			text = rewriteCss(text, baseUrl, workerOrigin);
-		} else if (kind === 'js') {
-			text = rewriteJsModuleSpecifiers(text, baseUrl, workerOrigin);
-		} else if (kind === 'svg') {
-			text = rewriteSvg(text, baseUrl, workerOrigin);
-		} else if (kind === 'json' || kind === 'manifest') {
-			text = rewriteJsonUrls(text, baseUrl, workerOrigin);
-		}
-	} catch { /* 重写失败则回退原文 */ }
+	const { text: rawText, passthrough } = await readTransformText(response.body);
+	let bodyOut = passthrough;
+	if (bodyOut === null) {
+		let text = rawText;
+		try {
+			if (kind === 'css') {
+				text = rewriteCss(text, baseUrl, workerOrigin);
+			} else if (kind === 'js') {
+				text = rewriteJsModuleSpecifiers(text, baseUrl, workerOrigin);
+			} else if (kind === 'svg') {
+				text = rewriteSvg(text, baseUrl, workerOrigin);
+			} else if (kind === 'json' || kind === 'manifest') {
+				text = rewriteJsonUrls(text, baseUrl, workerOrigin);
+			}
+		} catch { /* 重写失败则回退原文 */ }
+		bodyOut = text;
+	}
 
-	const resp = new Response(text, response);
+	const resp = new Response(bodyOut, response);
 	for (const h of STRIP_RESPONSE_HEADERS) resp.headers.delete(h);
 	stripTransformedHeaders(resp.headers);
 	const ct = (response.headers.get('content-type') || '').split(';')[0];
