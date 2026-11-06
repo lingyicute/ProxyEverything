@@ -334,6 +334,9 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 	const parts = [];
 	let cursor = 0;
 	let i = 0;
+	let parenDepth = 0;
+	const imageSetDepths = [];
+	let expectImageSetOption = false;
 	const isName = ch => !!ch && /[a-z0-9_\-\u0080-\uffff]/i.test(ch);
 	const replace = (start, end, value, wrapUrl = false) => {
 		if (value === null || !value) return;
@@ -344,8 +347,42 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 		cursor = end;
 	};
 	while (i < source.length) {
-		if (source.startsWith('/*', i)) { i = skipCssSpace(source, i, true); continue; }
-		if (source[i] === '"' || source[i] === "'") { i = readCssString(source, i).end; continue; }
+		if (source.startsWith('/*', i) || isSrcsetSpace(source[i])) {
+			i = skipCssSpace(source, i, true);
+			continue;
+		}
+		if (source[i] === '"' || source[i] === "'") {
+			const str = readCssString(source, i);
+			if (expectImageSetOption && imageSetDepths.length &&
+				imageSetDepths[imageSetDepths.length - 1] === parenDepth) {
+				replace(i, str.end, str.value);
+				expectImageSetOption = false;
+			}
+			i = str.end;
+			continue;
+		}
+		if (source[i] === '(') {
+			parenDepth++;
+			expectImageSetOption = false;
+			i++;
+			continue;
+		}
+		if (source[i] === ')') {
+			if (imageSetDepths.length && imageSetDepths[imageSetDepths.length - 1] === parenDepth) {
+				imageSetDepths.pop();
+			}
+			if (parenDepth > 0) parenDepth--;
+			expectImageSetOption = false;
+			i++;
+			continue;
+		}
+		if (source[i] === ',') {
+			expectImageSetOption = imageSetDepths.length > 0 &&
+				imageSetDepths[imageSetDepths.length - 1] === parenDepth;
+			i++;
+			continue;
+		}
+		expectImageSetOption = false;
 		const start = i;
 		const prefix = source[i] === '@' || source[i] === '#' ? source[i++] : '';
 		const nameStart = i;
@@ -365,6 +402,11 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 			const url = readCssUrl(source, i + 1);
 			replace(start, url.end, url.value, true);
 			i = url.end;
+		} else if (!prefix && (name === 'image-set' || name === '-webkit-image-set') && source[i] === '(') {
+			parenDepth++;
+			imageSetDepths.push(parenDepth);
+			expectImageSetOption = true;
+			i++;
 		}
 	}
 	parts.push(source.slice(cursor));
@@ -376,11 +418,11 @@ function rewriteStyleAttr(style, baseUrl, workerOrigin) {
 	return rewriteCss(style, baseUrl, workerOrigin);
 }
 
-/** 重写 <meta http-equiv="refresh" content="0; url=...">（兼容省略 url= 的规范写法，避免误匹配查询串内 url=） */
+/** 重写 <meta http-equiv="refresh" content="0; url=...">（兼容省略 url= 的规范写法，避免误匹配查询串内 url= 或空 url= 回溯） */
 function rewriteRefreshContent(content, baseUrl, workerOrigin) {
 	const stripQuotes = s => s.trim().replace(/^(['"])([\s\S]*)\1$/, '$2').replace(/^['"]|['"]$/g, '').trim();
 	return String(content).replace(
-		/^(\s*\d+(?:\.\d+)?(?:\s*[;,]\s*|\s+))(?:url\s*=\s*)?([\s\S]+)$/i,
+		/^(\s*(?:\d+(?:\.\d*)?|\.\d+)(?:\s*[;,]\s*|\s+))(?:url\s*=\s*|(?!url\s*=))([\s\S]*)$/i,
 		(m, prefix, u) => {
 			const cleaned = stripQuotes(u);
 			return cleaned ? prefix + 'url=' + rewriteUrl(cleaned, baseUrl, workerOrigin) : m;
@@ -539,12 +581,12 @@ function normalizeCharsetLabel(label, fromMetaOrCss = false) {
 
 /** 从 Content-Type 中提取受支持的 charset 标签（非法标签忽略以便回退嗅探） */
 function getCharset(contentType) {
-	const m = /charset\s*=\s*["']?([\w\-:.]+)["']?/i.exec(contentType || '');
+	const m = /charset\s*=\s*["']?\s*([\w\-:.]+)\s*["']?/i.exec(contentType || '');
 	return m ? normalizeCharsetLabel(m[1], false) : null;
 }
 
 /**
- * HTML 编码优先级：BOM > HTTP charset > 完整的 meta 声明。
+ * HTML 编码优先级：BOM > HTTP charset > 完整的 meta / XML 声明。
  * 一旦确定编码就停止嗅探，不必等到 4096 字节/EOF 才开始向浏览器输出。
  * tee 的另一支保留全部字节；只在固定大小的前缀缓冲中检查声明。
  */
@@ -569,8 +611,15 @@ async function sniffHtmlCharset(body, declaredCharset = null) {
 			if (declaredCharset) break;
 			// 剥除 HTML 注释后再扫描 meta，避免被注释掉的旧版编码声明误导。
 			const text = new TextDecoder().decode(head.subarray(0, total)).replace(/<!--[\s\S]*?(?:-->|$)/g, '');
-			// 不把分片边界处尚未闭合的属性值当成完整编码名；忽略不受支持的编码名继续扫描。
+			const xml = /^\s*<\?xml\b[^>]{0,200}?\bencoding\s*=\s*["']\s*([a-z0-9_\-:.]+)\s*["'][^>]*\?>/i.exec(text);
+			if (xml) {
+				const valid = normalizeCharsetLabel(xml[1], false);
+				if (valid) { charset = valid; break; }
+			}
+			// 不把分片边界处尚未闭合的属性值当成完整编码名；忽略不受支持的编码名或非 content-type 的 http-equiv。
 			for (const [tag] of text.matchAll(/<meta\b[^>]{0,300}>/gi)) {
+				const he = /\bhttp-equiv\s*=\s*["']?\s*([a-z0-9_-]+)/i.exec(tag);
+				if (he && he[1].toLowerCase() !== 'content-type') continue;
 				const m = /\bcharset\s*=\s*["']?\s*([a-z0-9_\-:.]+)(?=[\s"'/>;])/i.exec(tag);
 				if (m) {
 					const valid = normalizeCharsetLabel(m[1], true);
@@ -1065,14 +1114,23 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 		},
 	});
 
-	// 只采纳第一个 href；保留 target 与原始基地址供 shim 使用，移除原生 href。
+	// 只采纳第一个合法 HTTP(S) href；保留 target 与原始基地址供 shim 使用，移除原生 href。
 	rewriter.on('base', {
 		element(el) {
 			const h = el.getAttribute('href');
 			if (h != null && !hasBaseHref) {
-				hasBaseHref = true;
-				try { baseHref = new URL(h, baseUrl).href; } catch {}
-				el.setAttribute('data-pe-base', baseHref);
+				try {
+					const u = new URL(h, baseUrl);
+					if (u.protocol === 'http:' || u.protocol === 'https:') {
+						hasBaseHref = true;
+						baseHref = u.href;
+						el.setAttribute('data-pe-base', baseHref);
+					} else {
+						el.removeAttribute('data-pe-base');
+					}
+				} catch {
+					el.removeAttribute('data-pe-base');
+				}
 			} else {
 				el.removeAttribute('data-pe-base');
 			}
@@ -1181,7 +1239,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
  * 限制整体缓冲的解码后输入量；不信任 Content-Length（可缺失/虚报）。
  * 超过 2 MiB 上限时不再抛错返回 502 HTML，而是把已读分片与剩余流无缝拼接后流式透传。
  */
-function sniffTextChunkCharset(chunks, kind) {
+function sniffTextChunkCharset(chunks, kind, declaredCharset = null) {
 	const head = new Uint8Array(128);
 	let total = 0;
 	for (const c of chunks) {
@@ -1193,15 +1251,21 @@ function sniffTextChunkCharset(chunks, kind) {
 	if (total >= 2 && head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
 	if (total >= 2 && head[0] === 0xfe && head[1] === 0xff) return 'utf-16be';
 	if (total >= 3 && head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) return 'utf-8';
+	if (declaredCharset) return declaredCharset;
 	if (kind === 'css' && total >= 12) {
 		const ascii = new TextDecoder().decode(head.subarray(0, total));
 		const m = /^@charset\s+"([^"]{1,64})";/i.exec(ascii);
 		if (m) return normalizeCharsetLabel(m[1], true) || 'utf-8';
 	}
+	if (kind === 'svg' && total >= 20) {
+		const ascii = new TextDecoder().decode(head.subarray(0, total));
+		const m = /^\s*<\?xml\b[^>]{0,100}?\bencoding\s*=\s*["']\s*([^"'\s]{1,64})\s*["']/i.exec(ascii);
+		if (m) return normalizeCharsetLabel(m[1], false) || 'utf-8';
+	}
 	return 'utf-8';
 }
 
-async function readTransformText(body, kind = '') {
+async function readTransformText(body, kind = '', declaredCharset = null) {
 	if (!body) return { text: '', passthrough: null };
 	const reader = body.getReader();
 	const chunks = [];
@@ -1238,7 +1302,7 @@ async function readTransformText(body, kind = '') {
 			}
 			chunks.push(value);
 		}
-		const decoder = new TextDecoder(sniffTextChunkCharset(chunks, kind));
+		const decoder = new TextDecoder(sniffTextChunkCharset(chunks, kind, declaredCharset));
 		const parts = [];
 		for (const c of chunks) parts.push(decoder.decode(c, { stream: true }));
 		parts.push(decoder.decode());
@@ -1253,8 +1317,9 @@ async function readTransformText(body, kind = '') {
 	}
 }
 
-async function transformText(response, baseUrl, workerOrigin, kind, request) {
-	const { text: rawText, passthrough } = await readTransformText(response.body, kind);
+async function transformText(response, baseUrl, workerOrigin, kind, request, declaredCharset = null) {
+	const charset = declaredCharset || getCharset(response.headers.get('content-type'));
+	const { text: rawText, passthrough } = await readTransformText(response.body, kind, charset);
 	let bodyOut = passthrough;
 	if (bodyOut === null) {
 		let text = rawText;
@@ -1270,6 +1335,10 @@ async function transformText(response, baseUrl, workerOrigin, kind, request) {
 			}
 		} catch { /* 重写失败则回退原文 */ }
 		bodyOut = text;
+	} else if (charset && !isUtf8Charset(charset)) {
+		try {
+			bodyOut = bodyOut.pipeThrough(new TextDecoderStream(charset)).pipeThrough(new TextEncoderStream());
+		} catch {}
 	}
 
 	const resp = new Response(bodyOut, response);
@@ -1416,31 +1485,48 @@ function escapeXmlAttr(s) {
 /** 独立 SVG 文档：重写引用属性与内嵌样式，保持 XML 实体良构性 */
 function rewriteSvg(svg, baseUrl, workerOrigin) {
 	const rw = (v) => rewriteUrl(v, baseUrl, workerOrigin);
-	let out = String(svg).replace(
-		/(?<![\w:-])(href|xlink:href|src)\s*=\s*("([^"]*)"|'([^']*)')/gi,
-		(m, attr, _q, dq, sq) => {
-			const raw = dq !== undefined ? dq : sq;
-			const r = rw(decodeXmlEntities(raw));
-			return `${attr}="${escapeXmlAttr(r)}"`;
+	const rewriteTagAttrs = (tag) => tag
+		.replace(
+			/(?<![\w:-])(href|xlink:href|src)\s*=\s*("([^"]*)"|'([^']*)')/gi,
+			(m, attr, _q, dq, sq) => {
+				const raw = dq !== undefined ? dq : sq;
+				const r = rw(decodeXmlEntities(raw));
+				return `${attr}="${escapeXmlAttr(r)}"`;
+			}
+		)
+		.replace(
+			/(?<![\w:-])style\s*=\s*("([^"]*)"|'([^']*)')/gi,
+			(m, _q, dq, sq) => {
+				const raw = dq !== undefined ? dq : sq;
+				const decoded = decodeXmlEntities(raw);
+				const rewritten = rewriteStyleAttr(decoded, baseUrl, workerOrigin);
+				if (rewritten === decoded) return m;
+				return `style="${escapeXmlAttr(rewritten)}"`;
+			}
+		);
+	return String(svg).replace(
+		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|(<style\b(?:[^>"']|"[^"]*"|'[^']*')*>)([\s\S]*?)(<\/style>)|(<script\b(?:[^>"']|"[^"]*"|'[^']*')*>)([\s\S]*?)(<\/script>)|<[?a-zA-Z](?:[^>"']|"[^"]*"|'[^']*')*>/gi,
+		(m, styleOpen, css, styleClose, scriptOpen, scriptBody, scriptClose) => {
+			if (styleOpen) {
+				const open = rewriteTagAttrs(styleOpen);
+				if (css.includes('<![CDATA[')) {
+					return open + css.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,
+						(_cm, body) => `<![CDATA[${rewriteCss(body, baseUrl, workerOrigin)}]]>`) + styleClose;
+				}
+				const rewritten = rewriteCss(decodeXmlEntities(css), baseUrl, workerOrigin)
+					.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+				return open + rewritten + styleClose;
+			}
+			if (scriptOpen) {
+				return rewriteTagAttrs(scriptOpen) + scriptBody + scriptClose;
+			}
+			if (m.startsWith('<!--') || m.startsWith('<![CDATA[')) return m;
+			if (/^<\?xml(?![\w:-])/i.test(m)) {
+				return m.replace(/(?<![\w:-])encoding\s*=\s*("[^"]*"|'[^']*')/i, 'encoding="UTF-8"');
+			}
+			return rewriteTagAttrs(m);
 		}
 	);
-	out = out.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (m, open, css, close) => {
-		if (css.includes('<![CDATA[')) {
-			return open + css.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,
-				(_cm, body) => `<![CDATA[${rewriteCss(body, baseUrl, workerOrigin)}]]>`) + close;
-		}
-		const rewritten = rewriteCss(decodeXmlEntities(css), baseUrl, workerOrigin)
-			.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-		return open + rewritten + close;
-	});
-	out = out.replace(/(?<![\w:-])style\s*=\s*("([^"]*)"|'([^']*)')/gi, (m, _q, dq, sq) => {
-		const raw = dq !== undefined ? dq : sq;
-		const decoded = decodeXmlEntities(raw);
-		const rewritten = rewriteStyleAttr(decoded, baseUrl, workerOrigin);
-		if (rewritten === decoded) return m;
-		return `style="${escapeXmlAttr(rewritten)}"`;
-	});
-	return out;
 }
 
 /** Manifest：解析 JSON，仅改写规范中的 URL 字段，不触碰名称/键/任意业务字符串。 */
@@ -1832,22 +1918,21 @@ Disallow: /wss%3A
 		let bodySource = upstream.body;
 		let charset = getCharset(contentType);
 
-		// HTML 的 BOM 优先于 HTTP charset；无显式编码时再嗅探 meta。
+		// HTML 的 BOM 优先于 HTTP charset；无显式编码时再嗅探 meta/XML 声明，并流式转码为 UTF-8 供 HTMLRewriter 处理。
+		// 外部 CSS/JS/SVG/Manifest 交由 readTransformText 按 BOM > HTTP charset > 内联声明单次解码，避免二次解码乱码。
 		if (isHtml) {
 			const sniffed = await sniffHtmlCharset(upstream.body, charset);
 			charset = sniffed.charset;
 			bodySource = sniffed.body;
-		}
-
-		// 非 UTF-8 的文本先转码为 UTF-8，避免 HTMLRewriter/正则处理时乱码
-		if (bodySource && charset && !isUtf8Charset(charset)) {
-			try {
-				// 构造成功后才触碰流；无效 charset 不能回退到已 tee/锁定的 upstream.body。
-				const decoder = new TextDecoderStream(charset);
-				const encoder = new TextEncoderStream();
-				bodySource = bodySource.pipeThrough(decoder).pipeThrough(encoder);
-			} catch {
-				// 保留当前未消费的 bodySource，以 UTF-8 宽松解码作为回退。
+			if (bodySource && charset && !isUtf8Charset(charset)) {
+				try {
+					// 构造成功后才触碰流；无效 charset 不能回退到已 tee/锁定的 upstream.body。
+					const decoder = new TextDecoderStream(charset);
+					const encoder = new TextEncoderStream();
+					bodySource = bodySource.pipeThrough(decoder).pipeThrough(encoder);
+				} catch {
+					// 保留当前未消费的 bodySource，以 UTF-8 宽松解码作为回退。
+				}
 			}
 		}
 
