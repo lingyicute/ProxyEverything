@@ -331,10 +331,16 @@ function rewriteStyleAttr(style, baseUrl, workerOrigin) {
 	return rewriteCss(style, baseUrl, workerOrigin);
 }
 
-/** 重写 <meta http-equiv="refresh" content="0; url=..."> */
+/** 重写 <meta http-equiv="refresh" content="0; url=...">（兼容省略 url= 的规范写法） */
 function rewriteRefreshContent(content, baseUrl, workerOrigin) {
-	return String(content).replace(/url\s*=\s*(.*)$/i, (m, u) =>
-		'url=' + rewriteUrl(u.trim().replace(/^["']|["']$/g, ''), baseUrl, workerOrigin));
+	const stripQuotes = s => s.trim().replace(/^(['"])([\s\S]*)\1$/, '$2').replace(/^['"]|['"]$/g, '').trim();
+	const s = String(content);
+	if (/url\s*=/i.test(s)) {
+		return s.replace(/url\s*=\s*(.*)$/i, (m, u) =>
+			'url=' + rewriteUrl(stripQuotes(u), baseUrl, workerOrigin));
+	}
+	return s.replace(/^(\s*\d+(?:\.\d+)?\s*[;,]\s*)(.+)$/, (m, prefix, u) =>
+		prefix + 'url=' + rewriteUrl(stripQuotes(u), baseUrl, workerOrigin));
 }
 
 // Cookie 命名空间（不提供浏览器安全隔离）
@@ -817,12 +823,13 @@ document.addEventListener('submit',function(ev){
 // ============================================================
 
 const HANDLERS = {
-	a:            { href: 'url' },
+	a:            { href: 'url', 'xlink:href': 'url' },
 	area:         { href: 'url' },
-	link:         { href: 'url' },
-	script:       { src: 'url' },
+	link:         { href: 'url', imagesrcset: 'srcset' },
+	script:       { src: 'url', href: 'url', 'xlink:href': 'url' },
 	img:          { src: 'url', srcset: 'srcset' },
 	image:        { href: 'url', 'xlink:href': 'url' },
+	feimage:      { href: 'url', 'xlink:href': 'url' },
 	iframe:       { src: 'url' },
 	frame:        { src: 'url' },
 	source:       { src: 'url', srcset: 'srcset' },
@@ -835,6 +842,8 @@ const HANDLERS = {
 	button:       { formaction: 'url' },
 	form:         { action: 'url' },
 	use:          { href: 'url', 'xlink:href': 'url' },
+	mpath:        { href: 'url', 'xlink:href': 'url' },
+	textpath:     { href: 'url', 'xlink:href': 'url' },
 };
 
 /** raw-text 元素需要跨分片改写，但不能让单个 style/module 耗尽 Worker 内存。 */
@@ -842,9 +851,14 @@ function bufferedTextHandler(rewrite, matches = () => true) {
 	let parts = [];
 	let bytes = 0;
 	let active = false;
+	let mode = null;
 	const encoder = new TextEncoder();
 	return {
-		element(el) { parts = []; bytes = 0; active = matches(el); },
+		element(el) {
+			parts = []; bytes = 0;
+			mode = matches(el);
+			active = Boolean(mode);
+		},
 		text(chunk) {
 			if (!active) return;
 			bytes += encoder.encode(chunk.text).byteLength;
@@ -852,14 +866,17 @@ function bufferedTextHandler(rewrite, matches = () => true) {
 				// 响应头可能已经发出；此处抛错会留下带 200 状态的截断页面。
 				// 尚未输出任何改写正文，恢复已缓冲的原文并流式透传本元素余下部分。
 				chunk.replace(parts.join('') + chunk.text, { html: true });
-				parts = []; bytes = 0; active = false;
+				parts = []; bytes = 0; active = false; mode = null;
 				return;
 			}
 			parts.push(chunk.text);
 			if (chunk.lastInTextNode) {
-				// script/style 是 raw-text，不能把 & 等字符实体转义。
-				chunk.replace(rewrite(parts.join('')), { html: true });
+				const raw = parts.join('');
 				parts = []; bytes = 0;
+				let out = raw;
+				try { out = rewrite(raw, mode); } catch {}
+				// script/style 是 raw-text，不能把 & 等字符实体转义。
+				chunk.replace(out, { html: true });
 			} else chunk.remove();
 		},
 	};
@@ -900,11 +917,12 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 		},
 	});
 
-	// CSP meta 标签直接移除；refresh meta 重写目标；charset meta 对齐为 UTF-8
+	// CSP/Set-Cookie/X-Frame-Options meta 标签直接移除；refresh meta 重写目标；charset meta 对齐为 UTF-8
 	rewriter.on('meta', {
 		element(el) {
-			const he = (el.getAttribute('http-equiv') || '').toLowerCase();
-			if (he === 'content-security-policy' || he === 'content-security-policy-report-only') {
+			const he = (el.getAttribute('http-equiv') || '').trim().toLowerCase();
+			if (he === 'content-security-policy' || he === 'content-security-policy-report-only' ||
+				he === 'set-cookie' || he === 'x-frame-options') {
 				el.remove();
 				return;
 			}
@@ -922,11 +940,17 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 		},
 	});
 
-	// 对 style 与内联 ES module 使用同一个有界缓冲器；其它脚本原样保留。
+	// 对 style、内联 ES module 与 importmap 使用同一个有界缓冲器；其它脚本原样保留。
 	rewriter.on('style', bufferedTextHandler(css => rewriteCss(css, baseHref, workerOrigin)));
 	rewriter.on('script', bufferedTextHandler(
-		js => rewriteJsModuleSpecifiers(js, baseHref, workerOrigin),
-		el => !el.hasAttribute('src') && (el.getAttribute('type') || '').trim().toLowerCase() === 'module'
+		(text, kind) => kind === 'importmap'
+			? rewriteImportMap(text, baseHref, workerOrigin)
+			: rewriteJsModuleSpecifiers(text, baseHref, workerOrigin),
+		el => {
+			if (el.hasAttribute('src')) return null;
+			const type = (el.getAttribute('type') || '').trim().toLowerCase();
+			return type === 'module' || type === 'importmap' ? type : null;
+		}
 	));
 
 	// 具体标签的 URL 属性
@@ -1116,23 +1140,85 @@ function rewriteJsModuleSpecifiers(js, baseUrl, workerOrigin) {
 	return parts.join('');
 }
 
-/** 独立 SVG 文档：正则重写引用属性与内嵌样式 */
+/** 重写 <script type="importmap">：改写映射 URL 并移除被改写模块失效的 integrity */
+function rewriteImportMap(text, baseUrl, workerOrigin) {
+	let map;
+	try { map = JSON.parse(text); } catch { return text; }
+	if (!map || typeof map !== 'object' || Array.isArray(map)) return text;
+	const rewriteSpecMap = (specMap, base) => {
+		if (!specMap || typeof specMap !== 'object' || Array.isArray(specMap)) return;
+		for (const [k, v] of Object.entries(specMap)) {
+			if (typeof v !== 'string' || k.endsWith('/')) continue;
+			specMap[k] = rewriteUrl(v, base, workerOrigin);
+		}
+	};
+	rewriteSpecMap(map.imports, baseUrl);
+	if (map.scopes && typeof map.scopes === 'object' && !Array.isArray(map.scopes)) {
+		const nextScopes = {};
+		for (const [scopeKey, specMap] of Object.entries(map.scopes)) {
+			let scopeBase = baseUrl;
+			try { scopeBase = new URL(scopeKey, baseUrl).href; } catch {}
+			rewriteSpecMap(specMap, scopeBase);
+			const rwKey = scopeKey.endsWith('/') ? scopeKey : rewriteUrl(scopeKey, baseUrl, workerOrigin);
+			nextScopes[rwKey] = specMap;
+		}
+		map.scopes = nextScopes;
+	}
+	delete map.integrity;
+	return JSON.stringify(map);
+}
+
+function decodeXmlEntities(s) {
+	return String(s).replace(/&(?:#(\d+)|#x([0-9a-f]+)|(amp|lt|gt|quot|apos));/gi, (m, dec, hex, named) => {
+		if (dec) {
+			const code = parseInt(dec, 10);
+			return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+		}
+		if (hex) {
+			const code = parseInt(hex, 16);
+			return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+		}
+		switch (named.toLowerCase()) {
+			case 'amp': return '&';
+			case 'lt': return '<';
+			case 'gt': return '>';
+			case 'quot': return '"';
+			case 'apos': return "'";
+		}
+		return m;
+	});
+}
+
+function escapeXmlAttr(s) {
+	return String(s).replace(/[&"<>]/g, c => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+/** 独立 SVG 文档：重写引用属性与内嵌样式，保持 XML 实体良构性 */
 function rewriteSvg(svg, baseUrl, workerOrigin) {
 	const rw = (v) => rewriteUrl(v, baseUrl, workerOrigin);
 	let out = String(svg).replace(
-		/\b(href|xlink:href|src)\s*=\s*("([^"]*)"|'([^']*)')/gi,
+		/(?<![\w:-])(href|xlink:href|src)\s*=\s*("([^"]*)"|'([^']*)')/gi,
 		(m, attr, _q, dq, sq) => {
-			const v = dq !== undefined ? dq : sq;
-			const r = rw(v);
-			return `${attr}="${r.replace(/"/g, '&quot;')}"`;
+			const raw = dq !== undefined ? dq : sq;
+			const r = rw(decodeXmlEntities(raw));
+			return `${attr}="${escapeXmlAttr(r)}"`;
 		}
 	);
-	out = out.replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/gi,
-		(m, open, css, close) => open + rewriteCss(css, baseUrl, workerOrigin) + close);
-	out = out.replace(/\bstyle\s*=\s*("([^"]*)"|'([^']*)')/gi, (m, _q, dq, sq) => {
-		const v = dq !== undefined ? dq : sq;
-		if (!/url\s*\(/i.test(v)) return m;
-		return `style="${rewriteStyleAttr(v, baseUrl, workerOrigin).replace(/"/g, '&quot;')}"`;
+	out = out.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (m, open, css, close) => {
+		if (css.includes('<![CDATA[')) {
+			return open + css.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,
+				(_cm, body) => `<![CDATA[${rewriteCss(body, baseUrl, workerOrigin)}]]>`) + close;
+		}
+		const rewritten = rewriteCss(decodeXmlEntities(css), baseUrl, workerOrigin)
+			.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+		return open + rewritten + close;
+	});
+	out = out.replace(/(?<![\w:-])style\s*=\s*("([^"]*)"|'([^']*)')/gi, (m, _q, dq, sq) => {
+		const raw = dq !== undefined ? dq : sq;
+		const decoded = decodeXmlEntities(raw);
+		const rewritten = rewriteStyleAttr(decoded, baseUrl, workerOrigin);
+		if (rewritten === decoded) return m;
+		return `style="${escapeXmlAttr(rewritten)}"`;
 	});
 	return out;
 }
@@ -1520,8 +1606,8 @@ Disallow: /wss%3A
 				result.headers.set('X-Robots-Tag', 'noindex, nofollow');
 			}
 			applyCors(result.headers, request);
-			applyCachePolicy(result, request);
 			rescopeSetCookies(result.headers, ck.ns, ck.isHttps);
+			applyCachePolicy(result, request);
 			return result;
 		}
 
