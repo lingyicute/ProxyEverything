@@ -41,6 +41,7 @@ const STRIP_RESPONSE_HEADERS = [
 	'strict-transport-security',
 	'clear-site-data',    // 上游不能清空整个代理域的 Cookie/存储/缓存
 	'service-worker-allowed', // 上游不能扩大代理域上的 Service Worker 作用域
+	'speculation-rules',  // 预取/预渲染规则头指向原站路径，剥除以防绕过代理
 	'www-authenticate',   // 原生 HTTP 认证会把不同目标折叠进代理域同一个保护空间
 	'authentication-info',
 ];
@@ -122,7 +123,7 @@ function toProxyUrl(targetUrl, workerOrigin) {
  * 解析失败或不可代理的 scheme（data:、javascript:、mailto: 等）原样返回。
  */
 function isProxiedPath(pathname) {
-	return /^\/(https?|wss?)(?:%3A%2F%2F|:\/\/)/i.test(pathname);
+	return /^\/(https?|wss?)(?:%3A|:)(?:%2F|\/){2}/i.test(pathname);
 }
 
 function rewriteUrl(value, baseUrl, workerOrigin) {
@@ -136,9 +137,14 @@ function rewriteUrl(value, baseUrl, workerOrigin) {
 	if (v.startsWith(workerOrigin + '/') && isProxiedPath(v.slice(workerOrigin.length))) return v;
 	try {
 		const abs = new URL(v, baseUrl);
-		// 已代理（同源且路径是编码后的目标 URL）
-		if (abs.origin === workerOrigin && isProxiedPath(abs.pathname)) {
-			return abs.pathname + abs.search + abs.hash;
+		if (abs.origin === workerOrigin) {
+			// 已代理（同源且路径是编码后的目标 URL）
+			if (isProxiedPath(abs.pathname)) {
+				return abs.pathname + abs.search + abs.hash;
+			}
+			// 落到代理域自身的非代理路径：回退按目标基地址解析，避免触发自代理拦截
+			const rebound = new URL(abs.pathname + abs.search + abs.hash, baseUrl);
+			return toProxyUrl(rebound.href, workerOrigin);
 		}
 		return toProxyUrl(abs.href, workerOrigin);
 	} catch {
@@ -347,16 +353,16 @@ function rewriteStyleAttr(style, baseUrl, workerOrigin) {
 	return rewriteCss(style, baseUrl, workerOrigin);
 }
 
-/** 重写 <meta http-equiv="refresh" content="0; url=...">（兼容省略 url= 的规范写法） */
+/** 重写 <meta http-equiv="refresh" content="0; url=...">（兼容省略 url= 的规范写法，避免误匹配查询串内 url=） */
 function rewriteRefreshContent(content, baseUrl, workerOrigin) {
 	const stripQuotes = s => s.trim().replace(/^(['"])([\s\S]*)\1$/, '$2').replace(/^['"]|['"]$/g, '').trim();
-	const s = String(content);
-	if (/url\s*=/i.test(s)) {
-		return s.replace(/url\s*=\s*(.*)$/i, (m, u) =>
-			'url=' + rewriteUrl(stripQuotes(u), baseUrl, workerOrigin));
-	}
-	return s.replace(/^(\s*\d+(?:\.\d+)?\s*[;,]\s*)(.+)$/, (m, prefix, u) =>
-		prefix + 'url=' + rewriteUrl(stripQuotes(u), baseUrl, workerOrigin));
+	return String(content).replace(
+		/^(\s*\d+(?:\.\d+)?(?:\s*[;,]\s*|\s+))(?:url\s*=\s*)?([\s\S]+)$/i,
+		(m, prefix, u) => {
+			const cleaned = stripQuotes(u);
+			return cleaned ? prefix + 'url=' + rewriteUrl(cleaned, baseUrl, workerOrigin) : m;
+		}
+	);
 }
 
 // Cookie 命名空间（不提供浏览器安全隔离）
@@ -919,8 +925,8 @@ document.addEventListener('submit',function(ev){
 // ============================================================
 
 const HANDLERS = {
-	a:            { href: 'url', 'xlink:href': 'url' },
-	area:         { href: 'url' },
+	a:            { href: 'url', 'xlink:href': 'url', ping: 'ping' },
+	area:         { href: 'url', 'xlink:href': 'url', ping: 'ping' },
 	link:         { href: 'url', imagesrcset: 'srcset' },
 	script:       { src: 'url', href: 'url', 'xlink:href': 'url' },
 	img:          { src: 'url', srcset: 'srcset' },
@@ -940,6 +946,10 @@ const HANDLERS = {
 	use:          { href: 'url', 'xlink:href': 'url' },
 	mpath:        { href: 'url', 'xlink:href': 'url' },
 	textpath:     { href: 'url', 'xlink:href': 'url' },
+	pattern:      { href: 'url', 'xlink:href': 'url' },
+	filter:       { href: 'url', 'xlink:href': 'url' },
+	lineargradient: { href: 'url', 'xlink:href': 'url' },
+	radialgradient: { href: 'url', 'xlink:href': 'url' },
 };
 
 /** raw-text 元素需要跨分片改写，但不能让单个 style/module 耗尽 Worker 内存。 */
@@ -1036,16 +1046,18 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 		},
 	});
 
-	// 对 style、内联 ES module 与 importmap 使用同一个有界缓冲器；其它脚本原样保留。
+	// 对 style、内联 ES module、importmap 与 speculationrules 使用同一个有界缓冲器；其它脚本原样保留。
 	rewriter.on('style', bufferedTextHandler(css => rewriteCss(css, baseHref, workerOrigin)));
 	rewriter.on('script', bufferedTextHandler(
 		(text, kind) => kind === 'importmap'
 			? rewriteImportMap(text, baseHref, workerOrigin)
-			: rewriteJsModuleSpecifiers(text, baseHref, workerOrigin),
+			: kind === 'speculationrules'
+				? rewriteSpeculationRules(text, baseHref, workerOrigin)
+				: rewriteJsModuleSpecifiers(text, baseHref, workerOrigin),
 		el => {
-			if (el.hasAttribute('src')) return null;
+			if (el.hasAttribute('src') || el.hasAttribute('href') || el.hasAttribute('xlink:href')) return null;
 			const type = (el.getAttribute('type') || '').trim().toLowerCase();
-			return type === 'module' || type === 'importmap' ? type : null;
+			return type === 'module' || type === 'importmap' || type === 'speculationrules' ? type : null;
 		}
 	));
 
@@ -1058,7 +1070,14 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 				for (const [attr, kind] of Object.entries(attrs)) {
 					const v = el.getAttribute(attr);
 					if (v == null) continue;
-					el.setAttribute(attr, kind === 'srcset' ? rewriteSrcset(v, baseHref, workerOrigin) : rw(v));
+					if (kind === 'srcset') {
+						el.setAttribute(attr, rewriteSrcset(v, baseHref, workerOrigin));
+					} else if (kind === 'ping') {
+						const trimmed = v.trim();
+						if (trimmed) el.setAttribute(attr, trimmed.split(/\s+/).map(rw).join(' '));
+					} else {
+						el.setAttribute(attr, rw(v));
+					}
 				}
 				// script 标签上的内联 srcset 不存在；但懒加载属性可能出现在任意标签上（下面统一处理）
 			},
@@ -1256,27 +1275,34 @@ function rewriteJsModuleSpecifiers(js, baseUrl, workerOrigin) {
 	return parts.join('');
 }
 
-/** 重写 <script type="importmap">：改写映射 URL 并移除被改写模块失效的 integrity */
+/** 重写 <script type="importmap">：按 HTML 规范以文档基地址解析映射并移除失效的 integrity */
 function rewriteImportMap(text, baseUrl, workerOrigin) {
 	let map;
 	try { map = JSON.parse(text); } catch { return text; }
 	if (!map || typeof map !== 'object' || Array.isArray(map)) return text;
-	const rewriteSpecMap = (specMap, base) => {
-		if (!specMap || typeof specMap !== 'object' || Array.isArray(specMap)) return;
+	const rewriteSpecMap = (specMap) => {
+		if (!specMap || typeof specMap !== 'object' || Array.isArray(specMap)) return specMap;
+		const next = {};
 		for (const [k, v] of Object.entries(specMap)) {
-			if (typeof v !== 'string' || k.endsWith('/')) continue;
-			specMap[k] = rewriteUrl(v, base, workerOrigin);
+			if (k.endsWith('/')) {
+				next[k] = v;
+				continue;
+			}
+			const rwKey = /^(?:\.\.?\/|\/|https?:\/\/)/i.test(k)
+				? rewriteUrl(k, baseUrl, workerOrigin)
+				: k;
+			next[rwKey] = typeof v === 'string' ? rewriteUrl(v, baseUrl, workerOrigin) : v;
 		}
+		return next;
 	};
-	rewriteSpecMap(map.imports, baseUrl);
+	if (map.imports && typeof map.imports === 'object' && !Array.isArray(map.imports)) {
+		map.imports = rewriteSpecMap(map.imports);
+	}
 	if (map.scopes && typeof map.scopes === 'object' && !Array.isArray(map.scopes)) {
 		const nextScopes = {};
 		for (const [scopeKey, specMap] of Object.entries(map.scopes)) {
-			let scopeBase = baseUrl;
-			try { scopeBase = new URL(scopeKey, baseUrl).href; } catch {}
-			rewriteSpecMap(specMap, scopeBase);
 			const rwKey = scopeKey.endsWith('/') ? scopeKey : rewriteUrl(scopeKey, baseUrl, workerOrigin);
-			nextScopes[rwKey] = specMap;
+			nextScopes[rwKey] = rewriteSpecMap(specMap);
 		}
 		map.scopes = nextScopes;
 	}
@@ -1284,15 +1310,36 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 	return JSON.stringify(map);
 }
 
+/** 重写 <script type="speculationrules"> 中的预取/预渲染 URL 列表 */
+function rewriteSpeculationRules(text, baseUrl, workerOrigin) {
+	let spec;
+	try { spec = JSON.parse(text); } catch { return text; }
+	if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return text;
+	for (const key of ['prefetch', 'prerender', 'prefetch_with_subresources']) {
+		const rules = spec[key];
+		if (!Array.isArray(rules)) continue;
+		for (const rule of rules) {
+			if (rule && Array.isArray(rule.urls)) {
+				rule.urls = rule.urls.map(u => typeof u === 'string' ? rewriteUrl(u, baseUrl, workerOrigin) : u);
+			}
+		}
+	}
+	return JSON.stringify(spec);
+}
+
+function isValidXmlCodePoint(code) {
+	return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff) && code !== 0xfffe && code !== 0xffff;
+}
+
 function decodeXmlEntities(s) {
 	return String(s).replace(/&(?:#(\d+)|#x([0-9a-f]+)|(amp|lt|gt|quot|apos));/gi, (m, dec, hex, named) => {
 		if (dec) {
 			const code = parseInt(dec, 10);
-			return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+			return isValidXmlCodePoint(code) ? String.fromCodePoint(code) : m;
 		}
 		if (hex) {
 			const code = parseInt(hex, 16);
-			return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+			return isValidXmlCodePoint(code) ? String.fromCodePoint(code) : m;
 		}
 		switch (named.toLowerCase()) {
 			case 'amp': return '&';
@@ -1360,7 +1407,18 @@ function rewriteJsonUrls(text, baseUrl, workerOrigin) {
 		fields(item, ['url']);
 		if (item) images(item.icons);
 	}
+	if (Array.isArray(manifest.protocol_handlers)) for (const item of manifest.protocol_handlers) {
+		fields(item, ['url']);
+	}
+	if (Array.isArray(manifest.file_handlers)) for (const item of manifest.file_handlers) {
+		fields(item, ['action']);
+		if (item) images(item.icons);
+	}
+	if (Array.isArray(manifest.related_applications)) for (const item of manifest.related_applications) {
+		fields(item, ['url']);
+	}
 	fields(manifest.share_target, ['action']);
+	delete manifest.serviceworker;
 	return JSON.stringify(manifest);
 }
 
@@ -1686,10 +1744,13 @@ Disallow: /wss%3A
 		try {
 		// ---- 按内容类型处理 ----
 		const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
+		const fetchDest = (request.headers.get('sec-fetch-dest') || '').toLowerCase();
 		const baseUrl = documentBase(targetUrl);
 		const isHtml = contentType.includes('text/html') || contentType.includes('application/xhtml+xml');
+		const isManifest = contentType.includes('manifest+json') ||
+			(contentType.includes('json') && fetchDest === 'manifest');
 		const isTextual = isHtml || contentType.includes('text/css') || contentType.includes('javascript') ||
-			contentType.includes('ecmascript') || contentType.includes('manifest+json') ||
+			contentType.includes('ecmascript') || isManifest ||
 			contentType.includes('image/svg+xml');
 		// 透传分支不应建立转码管线，否则 upstream.body 会被锁定却仍被复用。
 		if (!isTextual) return buildResponse(upstream, request, ck);
@@ -1760,7 +1821,7 @@ Disallow: /wss%3A
 		}
 
 		// Web App Manifest（图标、start_url 等）
-		if (contentType.includes('manifest+json')) {
+		if (isManifest) {
 			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'json', request), upstream, request, ck);
 		}
 
