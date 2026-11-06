@@ -1122,6 +1122,11 @@ function rewriteJsonUrls(text, baseUrl, workerOrigin) {
 // 请求解析
 // ============================================================
 
+/** 规范化主机名：统一小写并剥除末尾根域点（包括多重尾点） */
+function normalizeHostname(hostname) {
+	return String(hostname || '').toLowerCase().replace(/\.+$/, '');
+}
+
 /** 从代理 URL 解析出目标绝对 URL；非法时返回 null */
 function parseTarget(url) {
 	if (url.pathname === '/' || url.pathname === '') return null;
@@ -1133,6 +1138,9 @@ function parseTarget(url) {
 	} else {
 		target = 'https://' + raw.replace(/^\/+/, '');
 	}
+	// 路径内若编码了 #fragment，须先截断再拼接查询串，避免查询参数被吞入 hash。
+	const hashIdx = target.indexOf('#');
+	if (hashIdx >= 0) target = target.slice(0, hashIdx);
 	// 不保留内部参数名：目标站可能合法使用 __pe，且查询串可能参与签名。
 	const search = url.search;
 	if (search) {
@@ -1141,7 +1149,9 @@ function parseTarget(url) {
 	let u;
 	try { u = new URL(target); } catch { return null; }
 	if (!['http:', 'https:', 'ws:', 'wss:'].includes(u.protocol)) return null;
-	if (!u.hostname.includes('.') && u.hostname !== 'localhost') return null;
+	const host = normalizeHostname(u.hostname);
+	if (!host || host.startsWith('.') || host.includes('..') ||
+		(!host.includes('.') && host !== 'localhost')) return null;
 	u.username = ''; u.password = '';
 	u.hash = '';
 	return u;
@@ -1155,7 +1165,7 @@ function targetPolicyError(targetUrl, env) {
 	const target = new URL(targetUrl.href);
 	if (target.protocol === 'ws:') target.protocol = 'http:';
 	if (target.protocol === 'wss:') target.protocol = 'https:';
-	const host = target.hostname.toLowerCase().replace(/\.$/, '');
+	const host = normalizeHostname(target.hostname);
 	if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.startsWith('[') ||
 		host === 'localhost' || /\.(localhost|local|internal)$/.test(host)) {
 		return { status: 403, message: '不允许代理 IP 字面量或本地目标名称' };
@@ -1319,8 +1329,9 @@ Disallow: /wss%3A
 		if (policyError) return new Response(policyError.message, {
 			status: policyError.status, headers: { 'Cache-Control': 'no-store' },
 		});
-		// 防环：不允许代理 Worker 自身（比较 host 含端口）
-		if (targetUrl.host === url.host) {
+		// 防环：不允许代理 Worker 自身（比较规范化主机名与端口）
+		if (normalizeHostname(targetUrl.hostname) === normalizeHostname(url.hostname) &&
+			targetUrl.port === url.port) {
 			return invalidTargetPage(url, '不允许代理本站自身');
 		}
 
@@ -1355,11 +1366,11 @@ Disallow: /wss%3A
 		if (referer) {
 			try {
 				const rUrl = new URL(referer);
-				if (rUrl.origin === workerOrigin) {
-					const rTarget = parseTarget(rUrl);
-					fwdHeaders.set('Referer', rTarget ? rTarget.href : fetchUrl);
-				}
-			} catch {}
+				const rTarget = rUrl.origin === workerOrigin ? parseTarget(rUrl) : null;
+				fwdHeaders.set('Referer', rTarget ? rTarget.href : fetchUrl);
+			} catch {
+				fwdHeaders.set('Referer', fetchUrl);
+			}
 		} else {
 			fwdHeaders.set('Referer', fetchUrl);
 		}
