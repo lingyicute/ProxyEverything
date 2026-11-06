@@ -59,7 +59,10 @@ const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 const PROTECTED_END_TO_END = new Set([
 	'content-type', 'content-length', 'content-encoding', 'content-range',
 	'set-cookie', 'cookie', 'location', 'cache-control', 'vary',
-	'host', 'origin', 'referer', 'x-robots-tag', 'sec-websocket-protocol',
+	'host', 'origin', 'referer', 'authorization', 'range',
+	'if-none-match', 'if-modified-since', 'if-match', 'if-unmodified-since', 'if-range',
+	'etag', 'last-modified', 'accept-ranges', 'content-disposition',
+	'x-robots-tag', 'sec-websocket-protocol',
 	'access-control-allow-origin', 'access-control-allow-credentials',
 	'access-control-allow-methods', 'access-control-allow-headers',
 	'access-control-max-age',
@@ -115,6 +118,10 @@ function toProxyUrl(targetUrl, workerOrigin) {
 	const u = new URL(targetUrl);
 	if (u.protocol !== 'http:' && u.protocol !== 'https:' &&
 		u.protocol !== 'ws:' && u.protocol !== 'wss:') return targetUrl;
+	const host = normalizeHostname(u.hostname);
+	if (host) {
+		try { u.hostname = host; } catch {}
+	}
 	return `${workerOrigin}/${encodeURIComponent(u.protocol + '//' + u.host + u.pathname)}${u.search}${u.hash}`;
 }
 
@@ -124,6 +131,19 @@ function toProxyUrl(targetUrl, workerOrigin) {
  */
 function isProxiedPath(pathname) {
 	return /^\/(https?|wss?)(?:%3A|:)(?:%2F|\/){2}/i.test(pathname);
+}
+
+/** 判断 URL 是否指向代理 Worker 自身主机与端口（忽略协议差异与尾点） */
+function isWorkerHost(u, workerOrigin) {
+	if (!u || !workerOrigin) return false;
+	try {
+		const w = new URL(workerOrigin);
+		return Boolean(w.hostname) &&
+			normalizeHostname(u.hostname) === normalizeHostname(w.hostname) &&
+			u.port === w.port;
+	} catch {
+		return false;
+	}
 }
 
 function rewriteUrl(value, baseUrl, workerOrigin) {
@@ -137,13 +157,16 @@ function rewriteUrl(value, baseUrl, workerOrigin) {
 	if (v.startsWith(workerOrigin + '/') && isProxiedPath(v.slice(workerOrigin.length))) return v;
 	try {
 		const abs = new URL(v, baseUrl);
-		if (abs.origin === workerOrigin) {
-			// 已代理（同源且路径是编码后的目标 URL）
+		if (isWorkerHost(abs, workerOrigin)) {
+			// 已代理（同源主机且路径是编码后的目标 URL）
 			if (isProxiedPath(abs.pathname)) {
 				return abs.pathname + abs.search + abs.hash;
 			}
 			// 落到代理域自身的非代理路径：回退按目标基地址解析，避免触发自代理拦截
 			const rebound = new URL(abs.pathname + abs.search + abs.hash, baseUrl);
+			if (abs.protocol === 'ws:' || abs.protocol === 'wss:') {
+				rebound.protocol = rebound.protocol === 'http:' ? 'ws:' : 'wss:';
+			}
 			return toProxyUrl(rebound.href, workerOrigin);
 		}
 		return toProxyUrl(abs.href, workerOrigin);
@@ -396,7 +419,7 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 	if (eq < 0) return null;
 	const name = head.slice(0, eq).trim();
 	if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(name)) return null;
-	const value = head.slice(eq + 1);
+	const value = head.slice(eq + 1).trim();
 
 	const out = [`${ns}${name}=${value}`];
 	let sameSiteNone = false;
@@ -1538,14 +1561,20 @@ function documentBase(targetUrl) {
 	return targetUrl.href;
 }
 
+// 剥除代理链路注入的宿主/客户端转发头，避免源站据此生成指向代理域的链接或产生协议重定向循环
+const STRIP_FORWARDED_HEADERS = new Set([
+	'x-forwarded-host', 'x-forwarded-server', 'x-forwarded-proto',
+	'x-forwarded-port', 'x-forwarded-for', 'x-real-ip', 'true-client-ip', 'forwarded',
+]);
+
 /** 重写转发请求中的 Referer 头，避免将代理域名泄露给源站 */
 function resolveUpstreamReferer(request, workerOrigin, fallbackUrl) {
 	const referer = request.headers.get('referer');
 	if (!referer) return fallbackUrl;
 	try {
 		const rUrl = new URL(referer);
-		const rTarget = rUrl.origin === workerOrigin ? parseTarget(rUrl) : null;
-		if (rTarget) {
+		const rTarget = isWorkerHost(rUrl, workerOrigin) ? parseTarget(rUrl) : null;
+		if (rTarget && !isWorkerHost(rTarget, workerOrigin)) {
 			if (rTarget.protocol === 'ws:') rTarget.protocol = 'http:';
 			else if (rTarget.protocol === 'wss:') rTarget.protocol = 'https:';
 			return rTarget.href;
@@ -1568,7 +1597,7 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin) {
 	const headers = new Headers();
 	for (const [k, v] of request.headers) {
 		const lk = k.toLowerCase();
-		if (lk.startsWith('cf-') || lk === 'x-forwarded-host' || lk === 'x-forwarded-server') continue;
+		if (lk.startsWith('cf-') || STRIP_FORWARDED_HEADERS.has(lk)) continue;
 		headers.set(k, v);
 	}
 	stripHopByHop(headers);
@@ -1603,9 +1632,11 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin) {
 			try { to.send(ev.data); } catch {}
 		});
 		from.addEventListener('close', ev => {
-			// 1005/1006/1015 是状态标记，不允许写入关闭帧；若状态码或超长 reason 被拒绝则回退 1000 关闭对端。
+			// 1005/1006/1015 是状态标记，不允许写入关闭帧；若状态码或超长 reason 被拒绝则优先保留状态码，再回退 1000。
 			const code = ev.code === 1005 ? 1000 : [1006, 1015].includes(ev.code) ? 1011 : ev.code;
-			try { to.close(code, ev.reason); } catch { try { to.close(1000); } catch {} }
+			try { to.close(code, ev.reason); } catch {
+				try { to.close(code); } catch { try { to.close(1000); } catch {} }
+			}
 		});
 		from.addEventListener('error', () => {
 			try { to.close(1011, 'upstream error'); } catch { try { to.close(1000); } catch {} }
@@ -1722,7 +1753,7 @@ Disallow: /wss%3A
 		const fwdHeaders = new Headers();
 		for (const [k, v] of request.headers) {
 			const lk = k.toLowerCase();
-			if (lk.startsWith('cf-') || lk === 'x-forwarded-host' || lk === 'x-forwarded-server') continue;
+			if (lk.startsWith('cf-') || STRIP_FORWARDED_HEADERS.has(lk)) continue;
 			fwdHeaders.set(k, v);
 		}
 		stripHopByHop(fwdHeaders);
@@ -1753,7 +1784,16 @@ Disallow: /wss%3A
 				try {
 					const abs = new URL(loc, fetchUrl);
 					if (!['http:', 'https:'].includes(abs.protocol)) throw new Error('无效重定向协议');
-					resp.headers.set('Location', toProxyUrl(abs.href, workerOrigin));
+					if (isWorkerHost(abs, workerOrigin)) {
+						if (isProxiedPath(abs.pathname)) {
+							resp.headers.set('Location', `${workerOrigin}${abs.pathname}${abs.search}${abs.hash}`);
+						} else {
+							const rebound = new URL(abs.pathname + abs.search + abs.hash, fetchUrl);
+							resp.headers.set('Location', toProxyUrl(rebound.href, workerOrigin));
+						}
+					} else {
+						resp.headers.set('Location', toProxyUrl(abs.href, workerOrigin));
+					}
 				} catch {
 					resp.headers.delete('Location');
 				}
