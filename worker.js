@@ -109,6 +109,10 @@ function toProxyUrl(targetUrl, workerOrigin) {
  * 任意形式的 URL（绝对/协议相对/根相对/相对/已代理）→ 代理 URL。
  * 解析失败或不可代理的 scheme（data:、javascript:、mailto: 等）原样返回。
  */
+function isProxiedPath(pathname) {
+	return /^\/(https?|wss?)(?:%3A%2F%2F|:\/\/)/i.test(pathname);
+}
+
 function rewriteUrl(value, baseUrl, workerOrigin) {
 	if (value == null) return value;
 	let v = String(value).trim();
@@ -116,12 +120,12 @@ function rewriteUrl(value, baseUrl, workerOrigin) {
 	// 页内锚点（#foo、url(#gradient)）保持原样
 	if (v.startsWith('#')) return v;
 	// 已经是本站代理 URL
-	if (v.startsWith(workerOrigin + '/')) return v;
-	if (/^\/(https?|wss?)%3A%2F%2F/i.test(v)) return v;
+	if (isProxiedPath(v)) return v;
+	if (v.startsWith(workerOrigin + '/') && isProxiedPath(v.slice(workerOrigin.length))) return v;
 	try {
 		const abs = new URL(v, baseUrl);
 		// 已代理（同源且路径是编码后的目标 URL）
-		if (abs.origin === workerOrigin && /^\/(https?|wss?)%3A%2F%2F/i.test(abs.pathname)) {
+		if (abs.origin === workerOrigin && isProxiedPath(abs.pathname)) {
 			return abs.pathname + abs.search + abs.hash;
 		}
 		return toProxyUrl(abs.href, workerOrigin);
@@ -598,6 +602,7 @@ return DEC+(location.search?(DEC.indexOf('?')>=0?'&':'?')+location.search.substr
 var TARGET=currentTarget();
 var ABS_RE=/^[a-z][a-z0-9+.-]*:\\/\\//i;
 var SKIP_RE=/^(data:|blob:|javascript:|mailto:|tel:|sms:|about:|#)/i;
+var PROXY_RE=/^\\/(https?|wss?)(?:%3A%2F%2F|:\\/\\/)/i;
 function base(){
   var target=currentTarget();
   var b=document.querySelector('base[data-pe-base],base[href]');
@@ -612,11 +617,15 @@ function rp(v){
   }
   var s=String(v).trim();
   if(!s||SKIP_RE.test(s))return s;
-  if(s.indexOf(WO+'/')===0)return s;
-  if(/^\\/(https?|wss?)%3A%2F%2F/i.test(s))return s;
-  if(/^\\/(https?|wss?):\\/\\//i.test(s))return s;
+  if(PROXY_RE.test(s))return s;
+  if(s===WO)s='/';
+  else if(s.indexOf(WO+'/')===0){
+    var rest=s.substring(WO.length);
+    if(PROXY_RE.test(rest))return s;
+    s=rest;
+  }
   var abs;try{abs=new URL(s,base()).href;}catch(e){return s;}
-  if(abs.indexOf(WO+'/')===0)return abs;
+  if(abs.indexOf(WO+'/')===0&&PROXY_RE.test(abs.substring(WO.length)))return abs;
   if(ABS_RE.test(abs)){
     var u;try{u=new URL(abs);}catch(e){return s;}
     var p=u.protocol;
@@ -631,11 +640,27 @@ function rwUrlArg(a){
   return a;
 }
 window.__PE__={target:TARGET,rp:rp};
-/* Request 必须在浏览器把相对地址解析到代理域之前改写。 */
-if(window.Request){
-  var oRequest=window.Request;
+/* Request 必须在浏览器把相对地址解析到代理域之前改写；流式/POST Request 重建时需声明 duplex: 'half'。 */
+var oRequest=window.Request;
+function rwReq(input,init){
+  var nu=rp(input.url);
+  if(!nu||nu===input.url)return init!==undefined?new oRequest(input,init):input;
+  var r=init!==undefined?new oRequest(input,init):input;
+  var m=r.method||'GET';
+  return new oRequest(nu,{
+    method:m,headers:r.headers,
+    body:m!=='GET'&&m!=='HEAD'?r.body:undefined,
+    mode:r.mode==='navigate'?'same-origin':r.mode,
+    credentials:r.credentials,cache:r.cache,redirect:r.redirect,
+    referrer:r.referrer,referrerPolicy:r.referrerPolicy,
+    integrity:r.integrity,keepalive:r.keepalive,signal:r.signal,
+    duplex:'half'
+  });
+}
+if(oRequest){
   var ProxyRequest=function(input,init){
     if(!new.target)throw new TypeError('Request requires new');
+    if(input&&typeof input==='object'&&'url'in input)return rwReq(input,init);
     input=rwUrlArg(input);
     return Reflect.construct(oRequest,[input,init],new.target);
   };
@@ -649,10 +674,7 @@ if(of_)window.fetch=function(input,init){
   try{
     if(typeof input==='string')input=rp(input);
     else if(input instanceof URL)input=rp(input.href);
-    else if(input&&typeof input==='object'&&'url'in input){
-      var nu=rp(input.url);
-      if(nu&&nu!==input.url)input=new Request(nu,input);
-    }
+    else if(input&&typeof input==='object'&&'url'in input&&oRequest)input=rwReq(input);
   }catch(e){}
   return of_.call(this,input,init);
 };
@@ -745,8 +767,10 @@ var I=window.HTMLImageElement;
 patchSetter(I,'src');patchSetter(I,'srcset',1);
 patchSetter(window.HTMLScriptElement,'src');
 patchSetter(window.HTMLIFrameElement,'src');
-patchSetter(window.HTMLLinkElement,'href');
+patchSetter(window.HTMLFrameElement,'src');
+patchSetter(window.HTMLLinkElement,'href');patchSetter(window.HTMLLinkElement,'imageSrcset',1);
 patchSetter(window.HTMLAnchorElement,'href');
+patchSetter(window.HTMLAreaElement,'href');
 patchSetter(window.HTMLSourceElement,'src');patchSetter(window.HTMLSourceElement,'srcset',1);
 patchSetter(window.HTMLMediaElement,'src');
 patchSetter(window.HTMLVideoElement,'poster');
@@ -757,18 +781,38 @@ patchSetter(window.HTMLInputElement,'src');
 patchSetter(window.HTMLInputElement,'formAction');
 patchSetter(window.HTMLButtonElement,'formAction');
 patchSetter(window.HTMLTrackElement,'src');
-/* setAttribute 兜底（src/srcset/action/href/poster/data） */
-var ATTRS={src:0,srcset:1,action:0,formaction:0,poster:0,data:0,href:0};
+try{
+  if(window.HTMLBaseElement&&window.HTMLBaseElement.prototype){
+    var bd=Object.getOwnPropertyDescriptor(HTMLBaseElement.prototype,'href');
+    if(bd&&bd.configurable){
+      Object.defineProperty(HTMLBaseElement.prototype,'href',{
+        configurable:true,enumerable:bd.enumerable,
+        get:function(){return this.getAttribute('data-pe-base')||base();},
+        set:function(v){this.setAttribute('href',v);}
+      });
+    }
+  }
+}catch(e){}
+/* setAttribute 兜底（src/srcset/imagesrcset/action/formaction/poster/data/href/xlink:href） */
+var ATTRS={src:0,srcset:1,imagesrcset:1,action:0,formaction:0,poster:0,data:0,href:0,'xlink:href':0};
+var HREF_TAGS={A:1,LINK:1,AREA:1,IMAGE:1,USE:1,FEIMAGE:1,MPATH:1,TEXTPATH:1};
 if(window.Element){
   var oSA=Element.prototype.setAttribute;
   Element.prototype.setAttribute=function(n,v){
     try{
-      if(typeof n==='string'&&typeof v==='string'){
+      if(typeof n==='string'&&v!=null){
         var ln=n.toLowerCase();
+        var sv=v instanceof URL?v.href:String(v);
+        var tag=(this.tagName||'').toUpperCase();
+        if(ln==='href'&&tag==='BASE'){
+          var bUrl=new URL(sv,currentTarget()).href;
+          oSA.call(this,'data-pe-base',bUrl);
+          this.removeAttribute('href');
+          return;
+        }
         if(Object.prototype.hasOwnProperty.call(ATTRS,ln)){
-          var tag=this.tagName;
-          if(ln!=='href'||tag==='A'||tag==='LINK'||tag==='AREA'||tag==='BASE'){
-            arguments[1]=ATTRS[ln]?rwSrcset(v):rp(v);
+          if(ln!=='href'||HREF_TAGS[tag]){
+            arguments[1]=ATTRS[ln]?rwSrcset(sv):rp(sv);
           }
         }
       }
@@ -805,13 +849,28 @@ if(CK){
   }
 }
 }catch(e){}
-/* ---- 表单提交兜底 ---- */
+/* ---- 链接点击与表单提交兜底（覆盖 innerHTML 动态插入节点） ---- */
+function rwLinkEv(ev){
+  try{
+    var el=ev.target&&ev.target.closest?ev.target.closest('a[href],area[href]'):null;
+    if(!el)return;
+    var h=el.getAttribute('href');
+    if(h){var p=rp(h);if(p&&p!==h)el.setAttribute('href',p);}
+  }catch(e){}
+}
+document.addEventListener('click',rwLinkEv,true);
+document.addEventListener('auxclick',rwLinkEv,true);
 document.addEventListener('submit',function(ev){
   try{
     var f=ev.target;
     if(!f||f.tagName!=='FORM')return;
     var a=f.getAttribute('action');
     if(a){var p=rp(a);if(p&&p!==a)f.setAttribute('action',p);}
+    var sub=ev.submitter;
+    if(sub&&sub.getAttribute){
+      var fa=sub.getAttribute('formaction');
+      if(fa){var pfa=rp(fa);if(pfa&&pfa!==fa)sub.setAttribute('formaction',pfa);}
+    }
   }catch(e){}
 },true);
 }catch(e){try{console.error('[ProxyEverything] shim error',e);}catch(_){}}
