@@ -327,6 +327,12 @@ function readCssUrl(css, start) {
 		const str = readCssString(css, i);
 		i = skipCssSpace(css, str.end, true);
 		if (str.value !== null && css[i] === ')') return { end: i + 1, value: str.value };
+		while (i < css.length && css[i] !== ')') {
+			if (css[i] === '"' || css[i] === "'") { i = readCssString(css, i).end; continue; }
+			if (css.startsWith('/*', i)) { i = skipCssSpace(css, i, true); continue; }
+			i = isValidCssEscape(css, i) ? cssEscapeEnd(css, i) : i + 1;
+		}
+		return { end: Math.min(i + 1, css.length), value: null };
 	} else {
 		i = skipCssSpace(css, start);
 		const valueStart = i;
@@ -445,7 +451,7 @@ function rewriteStyleAttr(style, baseUrl, workerOrigin) {
 
 /** 重写 <meta http-equiv="refresh" content="0; url=...">（兼容省略 url= 的规范写法，避免误匹配查询串内 url= 或空 url= 回溯） */
 function rewriteRefreshContent(content, baseUrl, workerOrigin) {
-	const stripQuotes = s => s.trim().replace(/^(['"])([\s\S]*)\1$/, '$2').replace(/^['"]|['"]$/g, '').trim();
+	const stripQuotes = s => s.trim().replace(/^(['"])([\s\S]*?)\1[\s\S]*$/, '$2').replace(/^['"]|['"]$/g, '').trim();
 	return String(content).replace(
 		/^(\s*(?:\d+(?:\.\d*)?|\.\d+)(?:\s*[;,]\s*|\s+))(?:url\s*=\s*|(?!url\s*=))([\s\S]*)$/i,
 		(m, prefix, u) => {
@@ -607,8 +613,8 @@ function normalizeCharsetLabel(label, fromMetaOrCss = false) {
 
 /** 从 Content-Type 中提取受支持的 charset 标签（非法标签忽略以便回退嗅探） */
 function getCharset(contentType) {
-	const m = /charset\s*=\s*["']?\s*([\w\-:.]+)\s*["']?/i.exec(contentType || '');
-	return m ? normalizeCharsetLabel(m[1], false) : null;
+	const m = /(?:^|;)\s*charset\s*=\s*(?:"\s*([\w\-:.]+)\s*"|'\s*([\w\-:.]+)\s*'|([\w\-:.]+)\s*(?=$|;))/i.exec(contentType || '');
+	return m ? normalizeCharsetLabel(m[1] || m[2] || m[3], false) : null;
 }
 
 /**
@@ -637,9 +643,9 @@ async function sniffHtmlCharset(body, declaredCharset = null) {
 			if (declaredCharset) break;
 			// 剥除 HTML 注释后再扫描 meta，避免被注释掉的旧版编码声明误导。
 			const text = new TextDecoder().decode(head.subarray(0, total)).replace(/<!--[\s\S]*?(?:-->|$)/g, '');
-			const xml = /^\s*<\?xml\b[^>]{0,200}?\bencoding\s*=\s*["']\s*([a-z0-9_\-:.]+)\s*["'][^>]*\?>/i.exec(text);
+			const xml = /^\s*<\?xml\b[^>]{0,200}?\bencoding\s*=\s*(["'])\s*([a-z0-9_\-:.]+)\s*\1[^>]*\?>/i.exec(text);
 			if (xml) {
-				const valid = normalizeCharsetLabel(xml[1], false);
+				const valid = normalizeCharsetLabel(xml[2], false);
 				if (valid) { charset = valid; break; }
 			}
 			// 不把分片边界处尚未闭合的属性值当成完整编码名；仅采纳直接 charset 属性或 http-equiv=content-type 的 content。
@@ -654,9 +660,9 @@ async function sniffHtmlCharset(body, declaredCharset = null) {
 					if (valid) { charset = valid; break; }
 				}
 				if ((attrs['http-equiv'] || '').trim().toLowerCase() === 'content-type' && attrs.content) {
-					const m = /charset\s*=\s*["']?\s*([a-z0-9_\-:.]+)\s*["']?/i.exec(attrs.content);
+					const m = /(?:^|;)\s*charset\s*=\s*(?:"\s*([a-z0-9_\-:.]+)\s*"|'\s*([a-z0-9_\-:.]+)\s*'|([a-z0-9_\-:.]+)\s*(?=$|[\s;]))/i.exec(attrs.content);
 					if (m) {
-						const valid = normalizeCharsetLabel(m[1], true);
+						const valid = normalizeCharsetLabel(m[1] || m[2] || m[3], true);
 						if (valid) { charset = valid; break; }
 					}
 				}
@@ -1343,13 +1349,15 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 				for (const [attr, kind] of Object.entries(attrs)) {
 					const v = el.getAttribute(attr);
 					if (v == null) continue;
+					const isDialogSub = attr === 'formaction' &&
+						(el.getAttribute('formmethod') || '').trim().toLowerCase() === 'dialog';
 					if (kind === 'srcset') {
 						el.setAttribute(attr, rewriteSrcset(v, baseHref, workerOrigin));
 					} else if (kind === 'ping') {
 						const trimmed = v.trim();
 						if (trimmed) el.setAttribute(attr, trimmed.split(/\s+/).map(rw).join(' '));
-					} else if (!v.trim() && ((tag === 'form' && !isDialogForm) ||
-						(hasBaseHref && (attr === 'href' || attr === 'action' || attr === 'formaction')))) {
+					} else if (!v.trim() && ((tag === 'form' && !isDialogForm) || (attr === 'formaction' && !isDialogSub) ||
+						(hasBaseHref && (attr === 'href' || attr === 'xlink:href' || attr === 'action')))) {
 						el.setAttribute(attr, rw(baseHref));
 					} else {
 						el.setAttribute(attr, rw(v));
@@ -1396,7 +1404,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			for (const attr of LAZY_ATTRS) {
 				const v = el.getAttribute(attr);
 				if (v == null) continue;
-				el.setAttribute(attr, /srcset$/.test(attr) ? rewriteSrcset(v, baseHref, workerOrigin) : rw(v));
+				el.setAttribute(attr, /(?:srcset|-set)$/.test(attr) ? rewriteSrcset(v, baseHref, workerOrigin) : rw(v));
 			}
 		},
 	});
@@ -1417,7 +1425,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
  * 超过 2 MiB 上限时不再抛错返回 502 HTML，而是把已读分片与剩余流无缝拼接后流式透传。
  */
 function sniffTextChunkCharset(chunks, kind, declaredCharset = null) {
-	const head = new Uint8Array(128);
+	const head = new Uint8Array(256);
 	let total = 0;
 	for (const c of chunks) {
 		const sub = c.subarray(0, head.length - total);
@@ -1436,8 +1444,8 @@ function sniffTextChunkCharset(chunks, kind, declaredCharset = null) {
 	}
 	if (kind === 'svg' && total >= 20) {
 		const ascii = new TextDecoder().decode(head.subarray(0, total));
-		const m = /^\s*<\?xml\b[^>]{0,100}?\bencoding\s*=\s*["']\s*([^"'\s]{1,64})\s*["']/i.exec(ascii);
-		if (m) return normalizeCharsetLabel(m[1], false) || 'utf-8';
+		const m = /^\s*<\?xml\b[^>]{0,200}?\bencoding\s*=\s*(["'])\s*([^"'\s]{1,64})\s*\1[^>]*\?>/i.exec(ascii);
+		if (m) return normalizeCharsetLabel(m[2], false) || 'utf-8';
 	}
 	return 'utf-8';
 }
@@ -1623,7 +1631,7 @@ function rewriteSpeculationRules(text, baseUrl, workerOrigin, docUrl = baseUrl) 
 	let spec;
 	try { spec = JSON.parse(text); } catch { return text; }
 	if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return text;
-	for (const key of ['prefetch', 'prerender', 'prefetch_with_subresources']) {
+	for (const key of ['prefetch', 'prerender', 'prefetch_with_subresources', 'prerender_until_script']) {
 		const rules = spec[key];
 		if (!Array.isArray(rules)) continue;
 		for (const rule of rules) {
@@ -1670,15 +1678,23 @@ function rewriteSvg(svg, baseUrl, workerOrigin) {
 	const rw = (v) => rewriteUrl(v, baseUrl, workerOrigin);
 	const rewriteTagAttrs = (tag) => {
 		let out = tag;
-		if (/^<(?:script|link)\b/i.test(out)) {
+		if (/^<(?:[a-z0-9_-]+:)?(?:script|link)\b/i.test(out)) {
 			out = out.replace(/\s+(?<![\w:-])integrity\s*=\s*(?:"[^"]*"|'[^']*')/gi, '');
 		}
 		return out
 			.replace(
-				/(?<![\w:-])(href|xlink:href|src)\s*=\s*("([^"]*)"|'([^']*)')/gi,
+				/(?<![\w:-])(href|xlink:href|src|action|formaction|poster)\s*=\s*("([^"]*)"|'([^']*)')/gi,
 				(m, attr, _q, dq, sq) => {
 					const raw = dq !== undefined ? dq : sq;
 					const r = rw(decodeXmlEntities(raw));
+					return `${attr}="${escapeXmlAttr(r)}"`;
+				}
+			)
+			.replace(
+				/(?<![\w:-])(srcset|imagesrcset)\s*=\s*("([^"]*)"|'([^']*)')/gi,
+				(m, attr, _q, dq, sq) => {
+					const raw = dq !== undefined ? dq : sq;
+					const r = rewriteSrcset(decodeXmlEntities(raw), baseUrl, workerOrigin);
 					return `${attr}="${escapeXmlAttr(r)}"`;
 				}
 			)
@@ -1707,16 +1723,40 @@ function rewriteSvg(svg, baseUrl, workerOrigin) {
 		(m, styleOpen, css, styleClose, scriptOpen, scriptBody, scriptClose) => {
 			if (styleOpen) {
 				const open = rewriteTagAttrs(styleOpen);
-				if (css.includes('<![CDATA[')) {
-					return open + css.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,
-						(_cm, body) => `<![CDATA[${rewriteCss(body, baseUrl, workerOrigin)}]]>`) + styleClose;
-				}
-				const rewritten = rewriteCss(decodeXmlEntities(css), baseUrl, workerOrigin)
+				const rewriteXmlCss = part => rewriteCss(decodeXmlEntities(part), baseUrl, workerOrigin)
 					.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-				return open + rewritten + styleClose;
+				if (css.includes('<![CDATA[')) {
+					let out = '';
+					let last = 0;
+					for (const cm of css.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>/g)) {
+						if (cm.index > last) out += rewriteXmlCss(css.slice(last, cm.index));
+						out += `<![CDATA[${rewriteCss(cm[1], baseUrl, workerOrigin)}]]>`;
+						last = cm.index + cm[0].length;
+					}
+					if (last < css.length) out += rewriteXmlCss(css.slice(last));
+					return open + out + styleClose;
+				}
+				return open + rewriteXmlCss(css) + styleClose;
 			}
 			if (scriptOpen) {
-				return rewriteTagAttrs(scriptOpen) + scriptBody + scriptClose;
+				const open = rewriteTagAttrs(scriptOpen);
+				const isInlineModule = !/\s(?:src|href|xlink:href)\s*=/i.test(scriptOpen) &&
+					/\stype\s*=\s*(?:"\s*module\s*"|'\s*module\s*'|module(?=[\s/>]))/i.test(scriptOpen);
+				if (!isInlineModule) return open + scriptBody + scriptClose;
+				const rewriteXmlJs = part => rewriteJsModuleSpecifiers(decodeXmlEntities(part), baseUrl, workerOrigin)
+					.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+				if (scriptBody.includes('<![CDATA[')) {
+					let out = '';
+					let last = 0;
+					for (const cm of scriptBody.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>/g)) {
+						if (cm.index > last) out += rewriteXmlJs(scriptBody.slice(last, cm.index));
+						out += `<![CDATA[${rewriteJsModuleSpecifiers(cm[1], baseUrl, workerOrigin)}]]>`;
+						last = cm.index + cm[0].length;
+					}
+					if (last < scriptBody.length) out += rewriteXmlJs(scriptBody.slice(last));
+					return open + out + scriptClose;
+				}
+				return open + rewriteXmlJs(scriptBody) + scriptClose;
 			}
 			if (m.startsWith('<!--') || m.startsWith('<![CDATA[')) return m;
 			if (/^<\?xml(?![\w:-])/i.test(m)) {
