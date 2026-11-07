@@ -59,14 +59,15 @@ const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 
 // 禁止 Connection 头夹带并借机剥除端到端关键语义头（RFC 9110 §7.6.1）
 const PROTECTED_END_TO_END = new Set([
-	'content-type', 'content-length', 'content-encoding', 'content-range',
+	'content-type', 'content-length', 'content-encoding', 'content-range', 'content-language',
 	'set-cookie', 'cookie', 'location', 'cache-control', 'vary',
 	'host', 'origin', 'referer', 'authorization', 'range',
 	'if-none-match', 'if-modified-since', 'if-match', 'if-unmodified-since', 'if-range',
 	'etag', 'last-modified', 'accept-ranges', 'content-disposition',
 	'accept', 'accept-encoding', 'accept-language', 'user-agent',
 	'allow', 'retry-after', 'age', 'expires', 'date', 'pragma',
-	'x-robots-tag', 'sec-websocket-protocol', 'sec-websocket-key',
+	'x-robots-tag', 'service-worker', 'sec-fetch-dest', 'sec-fetch-mode',
+	'sec-fetch-site', 'sec-fetch-user', 'sec-websocket-protocol', 'sec-websocket-key',
 	'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-accept',
 	'access-control-allow-origin', 'access-control-allow-credentials',
 	'access-control-allow-methods', 'access-control-allow-headers',
@@ -178,9 +179,13 @@ function rewriteUrl(value, baseUrl, workerOrigin) {
 		if (isWorkerHost(abs, workerOrigin)) {
 			// 已代理（同源主机且路径是编码后的目标 URL）
 			if (isProxiedPath(abs.pathname)) {
-				return /^([a-z][a-z0-9+.-]*:)?\/\//i.test(v)
-					? `${workerOrigin}${abs.pathname}${abs.search}${abs.hash}`
-					: abs.pathname + abs.search + abs.hash;
+				if (!/^([a-z][a-z0-9+.-]*:)?\/\//i.test(v)) {
+					return abs.pathname + abs.search + abs.hash;
+				}
+				const origin = abs.protocol === 'ws:' || abs.protocol === 'wss:'
+					? `${abs.protocol}//${new URL(workerOrigin).host}`
+					: workerOrigin;
+				return `${origin}${abs.pathname}${abs.search}${abs.hash}`;
 			}
 			// 落到代理域自身的非代理路径：回退按目标基地址解析，避免触发自代理拦截
 			const rebound = new URL(abs.pathname + abs.search + abs.hash, baseUrl);
@@ -486,6 +491,7 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 	const out = [`${ns}${name}=${value}`];
 	let sameSiteNone = false;
 	let hasSecure = false;
+	let hasPartitioned = false;
 
 	for (const raw of parts.slice(1)) {
 		const part = raw.trim();
@@ -495,12 +501,12 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 		if (attr === 'domain' || attr === 'path') continue;
 		if (attr === 'secure') {
 			// Worker 跑在 http 上时保留 Secure 会让浏览器直接丢弃这条 cookie
-			if (workerIsHttps) { out.push('Secure'); hasSecure = true; }
+			if (workerIsHttps && !hasSecure) { out.push('Secure'); hasSecure = true; }
 			continue;
 		}
 		if (attr === 'partitioned') {
 			// CHIPS Partitioned 属性同样要求 Secure，HTTP 下必须剥除
-			if (workerIsHttps) { out.push('Partitioned'); sameSiteNone = true; }
+			if (workerIsHttps && !hasPartitioned) { out.push('Partitioned'); hasPartitioned = true; sameSiteNone = true; }
 			continue;
 		}
 		if (attr === 'samesite') {
@@ -1776,7 +1782,7 @@ function parseTarget(url) {
 	// 拒绝无双斜杠的非 HTTP(S)/WS(S) scheme（如 mailto:user@host 被拼上 https:// 后误解析为认证凭据）
 	if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) &&
 		!/^(?:https?|wss?):\/\//i.test(trimmed) &&
-		!/^(?:localhost|[a-z0-9-]+\.[a-z0-9.-]+):\d+(?:[/?#]|$)/i.test(trimmed)) {
+		!/^(?:localhost\.?|[a-z0-9_-]+\.[a-z0-9_.-]+):\d+(?:[/?#]|$)/i.test(trimmed)) {
 		return null;
 	}
 	let target = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : 'https://' + trimmed;
@@ -1799,7 +1805,7 @@ function parseTarget(url) {
 	try { u.hostname = strippedHost; } catch { return null; }
 	const host = normalizeHostname(u.hostname);
 	if (!host || host.startsWith('.') || host.includes('..') ||
-		(!host.includes('.') && host !== 'localhost')) return null;
+		(!host.includes('.') && host !== 'localhost' && !host.startsWith('['))) return null;
 	u.username = ''; u.password = '';
 	u.hash = '';
 	return u;
@@ -1847,6 +1853,7 @@ const STRIP_FORWARDED_HEADERS = new Set([
 	'x-forwarded-host', 'x-forwarded-server', 'x-forwarded-proto',
 	'x-forwarded-port', 'x-forwarded-for', 'x-real-ip', 'true-client-ip', 'forwarded',
 	'x-original-host', 'x-original-url', 'x-rewrite-url', 'x-client-ip', 'via',
+	'cdn-loop', 'x-real-port', 'x-scheme', 'x-forwarded-ssl', 'front-end-https', 'fastly-client-ip',
 ]);
 
 /** 重写转发请求中的 Referer 头，避免将代理域名泄露给源站 */
@@ -1856,7 +1863,7 @@ function resolveUpstreamReferer(request, workerOrigin, fallbackUrl) {
 	try {
 		const rUrl = new URL(referer);
 		const rTarget = isWorkerHost(rUrl, workerOrigin) ? parseTarget(rUrl) : null;
-		if (rTarget && !isWorkerHost(rTarget, workerOrigin)) {
+		if (rTarget && !isWorkerHost(rTarget, workerOrigin) && !targetPolicyError(rTarget)) {
 			if (rTarget.protocol === 'ws:') rTarget.protocol = 'http:';
 			else if (rTarget.protocol === 'wss:') rTarget.protocol = 'https:';
 			return rTarget.href;
