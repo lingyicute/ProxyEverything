@@ -744,11 +744,25 @@ function getShimScript(workerOrigin, cookieNs) {
 	return `<script>(function(){
 try{
 var WO=${JSON.stringify(workerOrigin)};
+var WOU=new URL(WO);
+var WOH=WOU.hostname.toLowerCase().replace(/\\.+$/,'');
+var WOP=WOU.port||'';
 var CK=${JSON.stringify(cookieNs || '')};
+function decSafe(s){
+  try{return decodeURIComponent(s);}catch(e){
+    try{return decodeURIComponent(String(s).replace(/%(?![0-9a-f]{2})/gi,'%25'));}catch(_){return s;}
+  }
+}
+function isSelfHost(u){
+  var h=(u&&u.hostname||'').toLowerCase().replace(/\\.+$/,'');
+  if(!h)return false;
+  var p=u.port||'';
+  var lh=(location.hostname||'').toLowerCase().replace(/\\.+$/,'');
+  return (h===WOH&&p===WOP)||(Boolean(lh)&&h===lh&&p===(location.port||''));
+}
 function currentTarget(){
 var RAW=location.pathname.substring(1);
-var DEC;try{DEC=decodeURIComponent(RAW);}catch(e){DEC=RAW;}
-DEC=DEC.trim().replace(/^\\/+/,'');
+var DEC=decSafe(RAW).trim().replace(/^\\/+/,'');
 if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(DEC))DEC='https://'+DEC;
 var hIdx=DEC.indexOf('#');if(hIdx>=0)DEC=DEC.substring(0,hIdx);
 var full=DEC+(location.search?(DEC.indexOf('?')>=0?'&':'?')+location.search.substring(1):'');
@@ -760,8 +774,13 @@ var SKIP_RE=/^(data:|blob:|javascript:|mailto:|tel:|sms:|about:|#)/i;
 var PROXY_RE=/^\\/(https?|wss?)(?:%3A|:)(?:%2F|\\/){2}/i;
 function base(){
   var target=currentTarget();
-  var b=document.querySelector('base[data-pe-base],base[href]');
-  if(b){var h=b.getAttribute('data-pe-base')||b.getAttribute('href');if(h){try{var u=new URL(h,target);if(u.protocol==='http:'||u.protocol==='https:')return u.href;}catch(e){}}}
+  var list=document.querySelectorAll?document.querySelectorAll('base[data-pe-base],base[href]'):[];
+  if(!list.length&&document.querySelector){var b0=document.querySelector('base[data-pe-base],base[href]');if(b0)list=[b0];}
+  for(var i=0;i<list.length;i++){
+    var b=list[i];
+    var h=b.getAttribute('data-pe-base')||b.getAttribute('href');
+    if(h){try{var u=new URL(h,target);if(u.protocol==='http:'||u.protocol==='https:')return u.href;}catch(e){}}
+  }
   return target;
 }
 function rp(v){
@@ -778,12 +797,11 @@ function rp(v){
     if(s===WO)s='/';
     else if(ABS_RE.test(s)||s.indexOf('//')===0){
       var pu=new URL(s,WO);
-      var puH=pu.hostname.toLowerCase().replace(/\\.+$/,'');
-      var locH=(location.hostname||'').toLowerCase().replace(/\\.+$/,'');
-      if(puH&&puH===locH&&pu.port===(location.port||'')){
+      if(isSelfHost(pu)){
         if(PROXY_RE.test(pu.pathname)){
           if(pu.protocol==='ws:'||pu.protocol==='wss:'){
-            if(pu.hostname!==location.hostname)pu.hostname=location.hostname;
+            var canonH=location.hostname||WOU.hostname;
+            if(canonH&&pu.hostname!==canonH)pu.hostname=canonH;
             return pu.href;
           }
           return WO+pu.pathname+pu.search+pu.hash;
@@ -864,7 +882,10 @@ if(oRequest){
     init=rwInit(init);
     if(input&&typeof input==='object'&&'url'in input)return rwReq(input,init);
     input=rpBase(input);
-    return Reflect.construct(oRequest,[input,init],new.target);
+    try{return Reflect.construct(oRequest,[input,init],new.target);}catch(e){
+      if(init&&typeof init==='object')return buildReq(input instanceof URL?input.href:input,init);
+      throw e;
+    }
   };
   ProxyRequest.prototype=oRequest.prototype;
   Object.setPrototypeOf(ProxyRequest,oRequest);
@@ -890,9 +911,9 @@ XMLHttpRequest.prototype.open=function(m,u){
 /* ---- EventSource / sendBeacon / Worker / Audio / WebSocket ---- */
 if(window.EventSource){var oES=window.EventSource;var ES=function(u,c){var nu=rpBase(u);return arguments.length>1?new oES(nu,c):new oES(nu);};ES.prototype=oES.prototype;try{Object.setPrototypeOf(ES,oES);}catch(e){}window.EventSource=ES;}
 if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{u=typeof u==='string'&&!u.trim()?rp(base()):rp(u);}catch(e){}return arguments.length>1?oSB(u,d):oSB(u);};}
-if(window.Worker){var oWk=window.Worker;var Wk=function(u,o){var nu=rp(u);return arguments.length>1?new oWk(nu,o):new oWk(nu);};Wk.prototype=oWk.prototype;try{Object.setPrototypeOf(Wk,oWk);}catch(e){}window.Worker=Wk;}
-try{if(window.SharedWorker){var oSW=window.SharedWorker;var SW=function(u,o){var nu=rp(u);return arguments.length>1?new oSW(nu,o):new oSW(nu);};SW.prototype=oSW.prototype;try{Object.setPrototypeOf(SW,oSW);}catch(e){}window.SharedWorker=SW;}}catch(e){}
-try{if(window.Audio){var oAu=window.Audio;var Au=function(u){return arguments.length?new oAu(rp(u)):new oAu();};Au.prototype=oAu.prototype;try{Object.setPrototypeOf(Au,oAu);}catch(e){}window.Audio=Au;}}catch(e){}
+if(window.Worker){var oWk=window.Worker;var Wk=function(u,o){var nu=rpBase(u);return arguments.length>1?new oWk(nu,o):new oWk(nu);};Wk.prototype=oWk.prototype;try{Object.setPrototypeOf(Wk,oWk);}catch(e){}window.Worker=Wk;}
+try{if(window.SharedWorker){var oSW=window.SharedWorker;var SW=function(u,o){var nu=rpBase(u);return arguments.length>1?new oSW(nu,o):new oSW(nu);};SW.prototype=oSW.prototype;try{Object.setPrototypeOf(SW,oSW);}catch(e){}window.SharedWorker=SW;}}catch(e){}
+try{if(window.Audio){var oAu=window.Audio;var Au=function(u){return u!==undefined?new oAu(rp(u)):new oAu();};Au.prototype=oAu.prototype;try{Object.setPrototypeOf(Au,oAu);}catch(e){}window.Audio=Au;}}catch(e){}
 /* Service Worker 无法在代理路径下正确工作，直接禁用注册以免站点异常 */
 try{if(navigator.serviceWorker)navigator.serviceWorker.register=function(){return Promise.reject(new Error('[ProxyEverything] service worker disabled'));};}catch(e){}
 /* ---- WebSocket：目标地址已在路径内，无需污染目标查询串 ---- */
@@ -905,9 +926,7 @@ if(window.WebSocket){
       else if(u instanceof URL)nu=rp(u.href);
       if(typeof nu==='string'){
         var au=new URL(nu,location.href||WO);
-        var auH=au.hostname.toLowerCase().replace(/\\.+$/,'');
-        var locH=(location.hostname||'').toLowerCase().replace(/\\.+$/,'');
-        if(au.origin===WO||au.origin===location.origin||(auH&&auH===locH&&au.port===(location.port||''))){
+        if(au.origin===WO||au.origin===location.origin||isSelfHost(au)){
           au.protocol=(location.protocol||au.protocol)==='https:'?'wss:':'ws:';
           nu=au.href;
         }
@@ -1012,7 +1031,11 @@ try{
     if(bd&&bd.configurable){
       Object.defineProperty(HTMLBaseElement.prototype,'href',{
         configurable:true,enumerable:bd.enumerable,
-        get:function(){return this.getAttribute('data-pe-base')||base();},
+        get:function(){
+          var h=this.getAttribute('data-pe-base')||this.getAttribute('href');
+          if(h){try{var u=new URL(h,currentTarget());if(u.protocol==='http:'||u.protocol==='https:')return u.href;}catch(e){}}
+          return base();
+        },
         set:function(v){this.setAttribute('href',v);}
       });
     }
@@ -1021,6 +1044,23 @@ try{
 /* setAttribute / setAttributeNS 兜底（src/srcset/imagesrcset/action/formaction/poster/data/href/xlink:href/ping） */
 var ATTRS={src:0,srcset:1,imagesrcset:1,action:0,formaction:0,poster:0,data:0,href:0,'xlink:href':0,ping:2};
 var HREF_TAGS={A:1,LINK:1,AREA:1,SCRIPT:1,IMAGE:1,USE:1,FEIMAGE:1,MPATH:1,TEXTPATH:1,PATTERN:1,FILTER:1,LINEARGRADIENT:1,RADIALGRADIENT:1};
+function normTag(el){
+  var raw=(el&&(el.localName||el.tagName)||'').toUpperCase();
+  var idx=raw.indexOf(':');
+  return idx>=0?raw.slice(idx+1):raw;
+}
+function rwAttrVal(el,tag,attr,kind,sv){
+  if(kind===1)return rwSrcset(sv);
+  if(kind===2)return rwPing(sv);
+  if(!sv.trim()){
+    var fm=(el&&el.getAttribute&&(el.getAttribute(attr==='formaction'?'formmethod':'method')||'')||'').trim().toLowerCase();
+    var hasBase=Boolean(document.querySelector&&document.querySelector('base[data-pe-base],base[href]'));
+    if((tag==='FORM'&&attr==='action'&&fm!=='dialog')||(attr==='formaction'&&fm!=='dialog')||(hasBase&&(attr==='href'||attr==='xlink:href'))){
+      return rp(base());
+    }
+  }
+  return rp(sv);
+}
 if(window.Element){
   var oSA=Element.prototype.setAttribute;
   var oRA=Element.prototype.removeAttribute;
@@ -1030,7 +1070,7 @@ if(window.Element){
       if(typeof n==='string'&&v!=null){
         var ln=n.toLowerCase();
         var sv=v instanceof URL?v.href:String(v);
-        var tag=(this.tagName||'').toUpperCase();
+        var tag=normTag(this);
         if(ln==='integrity'&&(tag==='SCRIPT'||tag==='LINK')){
           if(oRA)oRA.call(this,'integrity');
           return;
@@ -1050,7 +1090,7 @@ if(window.Element){
         }
         if(Object.prototype.hasOwnProperty.call(ATTRS,ln)){
           if((ln!=='href'||HREF_TAGS[tag])&&(ln!=='ping'||tag==='A'||tag==='AREA')){
-            arguments[1]=ATTRS[ln]===1?rwSrcset(sv):ATTRS[ln]===2?rwPing(sv):rp(sv);
+            arguments[1]=rwAttrVal(this,tag,ln,ATTRS[ln],sv);
           }
         }
       }
@@ -1064,9 +1104,9 @@ if(window.Element){
         var ln=n.toLowerCase();
         var colon=ln.indexOf(':');
         var prefix=colon>=0?ln.slice(0,colon):'';
-        var local=prefix==='xlink'?ln.slice(6):ln;
+        var local=colon>=0?(prefix==='xlink'||ns?ln.slice(colon+1):ln):ln;
         var sv=v instanceof URL?v.href:String(v);
-        var tag=(this.tagName||'').toUpperCase();
+        var tag=normTag(this);
         if(local==='integrity'&&(tag==='SCRIPT'||tag==='LINK')){
           if(oRA)oRA.call(this,'integrity');
           return;
@@ -1086,7 +1126,7 @@ if(window.Element){
         }
         var kind=Object.prototype.hasOwnProperty.call(ATTRS,local)?ATTRS[local]:ATTRS[ln];
         if(kind!==undefined&&(local!=='href'||HREF_TAGS[tag])&&(local!=='ping'||tag==='A'||tag==='AREA')){
-          arguments[2]=kind===1?rwSrcset(sv):kind===2?rwPing(sv):rp(sv);
+          arguments[2]=rwAttrVal(this,tag,local,kind,sv);
         }
       }
     }catch(e){}
@@ -1094,7 +1134,7 @@ if(window.Element){
   };
   if(oRA)Element.prototype.removeAttribute=function(n){
     try{
-      if(typeof n==='string'&&n.toLowerCase()==='href'&&(this.tagName||'').toUpperCase()==='BASE'){
+      if(typeof n==='string'&&n.toLowerCase()==='href'&&normTag(this)==='BASE'){
         oRA.call(this,'data-pe-base');
       }
     }catch(e){}
@@ -1102,8 +1142,12 @@ if(window.Element){
   };
   if(oRANS)Element.prototype.removeAttributeNS=function(ns,n){
     try{
-      if(typeof n==='string'&&(n.toLowerCase()==='href'||n.toLowerCase()==='xlink:href')&&(this.tagName||'').toUpperCase()==='BASE'){
-        if(oRA)oRA.call(this,'data-pe-base');
+      if(typeof n==='string'){
+        var ln=n.toLowerCase();
+        var local=ln.indexOf(':')>=0?ln.slice(ln.indexOf(':')+1):ln;
+        if(local==='href'&&normTag(this)==='BASE'&&oRA){
+          oRA.call(this,'data-pe-base');
+        }
       }
     }catch(e){}
     return oRANS.apply(this,arguments);
@@ -1144,7 +1188,9 @@ if(CK){
 /* ---- 链接点击与表单提交兜底（覆盖 innerHTML 动态插入节点与编程式 submit） ---- */
 function rwLinkEv(ev){
   try{
-    var el=ev.target&&ev.target.closest?ev.target.closest('a,area'):null;
+    var t=ev.target;
+    if(t&&!t.closest)t=t.parentElement;
+    var el=t&&t.closest?t.closest('a,area'):null;
     if(!el)return;
     var h=el.getAttribute('href');
     if(h!==null){var p=rp(h.trim()||base());if(p&&p!==h)el.setAttribute('href',p);}
@@ -1159,7 +1205,7 @@ document.addEventListener('auxclick',rwLinkEv,true);
 document.addEventListener('contextmenu',rwLinkEv,true);
 function rwForm(f,sub){
   try{
-    if(!f||(f.tagName||'').toUpperCase()!=='FORM')return;
+    if(!f||normTag(f)!=='FORM')return;
     var m=(f.getAttribute('method')||'').trim().toLowerCase();
     var a=f.getAttribute('action');
     var at=a!==null?a.trim():null;
@@ -1168,8 +1214,12 @@ function rwForm(f,sub){
       f.setAttribute('action',rp(base()));
     }
     if(sub&&sub.getAttribute){
+      var sfm=(sub.getAttribute('formmethod')||'').trim().toLowerCase();
       var fa=sub.getAttribute('formaction');
-      if(fa!==null){var pfa=rp(fa.trim()||base());if(pfa&&pfa!==fa)sub.setAttribute('formaction',pfa);}
+      if(fa!==null&&(fa.trim()||sfm!=='dialog')){
+        var pfa=rp(fa.trim()||base());
+        if(pfa&&pfa!==fa)sub.setAttribute('formaction',pfa);
+      }
     }
   }catch(e){}
 }
@@ -2557,7 +2607,9 @@ try{
 }catch(e){}
 /* 涟漪 */
 document.addEventListener('pointerdown',function(e){
-  var el=e.target.closest?e.target.closest('.md-ripple'):null;
+  var t=e.target;
+  if(t&&!t.closest)t=t.parentElement;
+  var el=t&&t.closest?t.closest('.md-ripple'):null;
   if(!el)return;
   var r=el.getBoundingClientRect();
   var d=Math.max(r.width,r.height)*2.2;
@@ -2724,14 +2776,17 @@ ${md3Overlays()}
       var pPart=qIdx>=0?v.slice(0,qIdx):v;
       var sPart=qIdx>=0?v.slice(qIdx):'';
       try{
-        var dec=decodeURIComponent(pPart.replace(/^\\/+/,''));
+        var rawP=pPart.replace(/^\\/+/,'');
+        var dec;
+        try{dec=decodeURIComponent(rawP);}catch(_){dec=decodeURIComponent(rawP.replace(/%(?![0-9a-f]{2})/gi,'%25'));}
+        dec=dec.replace(/^ws(s?):\\/\\//i,'http$1://');
         var hIdx=dec.indexOf('#');
         if(hIdx>=0)dec=dec.slice(0,hIdx);
         if(sPart.charAt(0)==='?'&&dec.indexOf('?')>=0)sPart='&'+sPart.slice(1);
         v=dec+sPart;
       }catch(_){}
     }
-    if(/^[a-z][a-z0-9+.-]*:/i.test(v)&&!/^https?:\\/\\//i.test(v)&&!/^[a-z0-9.-]+:\\d+(?:[/?#]|$)/i.test(v)){
+    if(/^[a-z][a-z0-9+.-]*:/i.test(v)&&!/^https?:\\/\\//i.test(v)&&!/^(?:localhost\\.?|[a-z0-9_-]+\\.[a-z0-9_.-]+):\\d+(?:[/?#]|$)/i.test(v)){
       window.__peSnack('仅支持 http:// 或 https:// 网址');
       input.focus();
       return;
@@ -2742,7 +2797,7 @@ ${md3Overlays()}
     var rawH=u&&u.hostname?u.hostname.toLowerCase():'';
     var h=rawH.replace(/\\.+$/,'');
     if(u&&h){try{u.hostname=h;h=u.hostname.toLowerCase().replace(/\\.+$/,'');}catch(_){u=null;}}
-    if(!u||u.username||u.password||!h||rawH.charAt(0)==='.'||rawH.indexOf('..')>=0||h.indexOf('.')<0){
+    if(!u||u.username||u.password||!h||rawH.charAt(0)==='.'||rawH.indexOf('..')>=0||(h.indexOf('.')<0&&h!=='localhost'&&h.charAt(0)!=='[')){
       window.__peSnack('请输入有效的网址，例如 example.com');
       input.focus();
       return;
