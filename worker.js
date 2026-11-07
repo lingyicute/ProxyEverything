@@ -44,6 +44,8 @@ const STRIP_RESPONSE_HEADERS = [
 	'speculation-rules',  // 预取/预渲染规则头指向原站路径，剥除以防绕过代理
 	'www-authenticate',   // 原生 HTTP 认证会把不同目标折叠进代理域同一个保护空间
 	'authentication-info',
+	'referrer-policy',    // 防止上游策略剥除同源代理路径导致回源 Referer 丢失目标地址
+	'reporting-endpoints',
 ];
 
 // 仅正文变换时移除；透传响应必须保留其表示元数据。
@@ -62,10 +64,14 @@ const PROTECTED_END_TO_END = new Set([
 	'host', 'origin', 'referer', 'authorization', 'range',
 	'if-none-match', 'if-modified-since', 'if-match', 'if-unmodified-since', 'if-range',
 	'etag', 'last-modified', 'accept-ranges', 'content-disposition',
-	'x-robots-tag', 'sec-websocket-protocol',
+	'accept', 'accept-encoding', 'accept-language', 'user-agent',
+	'allow', 'retry-after', 'age', 'expires', 'date', 'pragma',
+	'x-robots-tag', 'sec-websocket-protocol', 'sec-websocket-key',
+	'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-accept',
 	'access-control-allow-origin', 'access-control-allow-credentials',
 	'access-control-allow-methods', 'access-control-allow-headers',
-	'access-control-max-age',
+	'access-control-expose-headers', 'access-control-request-method',
+	'access-control-request-headers', 'access-control-max-age',
 ]);
 
 /** Connection 可以声明额外的逐跳头，不能只删除固定列表。 */
@@ -105,9 +111,17 @@ const LAZY_ATTRS = [
  */
 const ENABLE_PROXY_NOINDEX = true;
 
-/** 安全 decodeURIComponent：源串含非法 % 序列时原样返回 */
+/** 安全 decodeURIComponent：源串含散落裸 % 时先补齐为 %25 再尝试解码 */
 function safeDecode(s) {
-	try { return decodeURIComponent(s); } catch { return s; }
+	try {
+		return decodeURIComponent(s);
+	} catch {
+		try {
+			return decodeURIComponent(String(s).replace(/%(?![0-9a-f]{2})/gi, '%25'));
+		} catch {
+			return s;
+		}
+	}
 }
 
 /**
@@ -157,10 +171,16 @@ function rewriteUrl(value, baseUrl, workerOrigin) {
 	if (v.startsWith(workerOrigin + '/') && isProxiedPath(v.slice(workerOrigin.length))) return v;
 	try {
 		const abs = new URL(v, baseUrl);
+		if (abs.protocol !== 'http:' && abs.protocol !== 'https:' &&
+			abs.protocol !== 'ws:' && abs.protocol !== 'wss:') {
+			return v;
+		}
 		if (isWorkerHost(abs, workerOrigin)) {
 			// 已代理（同源主机且路径是编码后的目标 URL）
 			if (isProxiedPath(abs.pathname)) {
-				return abs.pathname + abs.search + abs.hash;
+				return /^([a-z][a-z0-9+.-]*:)?\/\//i.test(v)
+					? `${workerOrigin}${abs.pathname}${abs.search}${abs.hash}`
+					: abs.pathname + abs.search + abs.hash;
 			}
 			// 落到代理域自身的非代理路径：回退按目标基地址解析，避免触发自代理拦截
 			const rebound = new URL(abs.pathname + abs.search + abs.hash, baseUrl);
@@ -1647,12 +1667,15 @@ function parseTarget(url) {
 	if (url.pathname === '/' || url.pathname === '') return null;
 	const raw = safeDecode(url.pathname.substring(1));
 	if (!raw) return null;
-	let target;
-	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
-		target = raw;
-	} else {
-		target = 'https://' + raw.replace(/^\/+/, '');
+	const trimmed = raw.trim().replace(/^\/+/, '');
+	if (!trimmed) return null;
+	// 拒绝无双斜杠的非 HTTP(S)/WS(S) scheme（如 mailto:user@host 被拼上 https:// 后误解析为认证凭据）
+	if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) &&
+		!/^(?:https?|wss?):\/\//i.test(trimmed) &&
+		!/^(?:localhost|[a-z0-9-]+\.[a-z0-9.-]+):\d+(?:[/?#]|$)/i.test(trimmed)) {
+		return null;
 	}
+	let target = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : 'https://' + trimmed;
 	// 路径内若编码了 #fragment，须先截断再拼接查询串，避免查询参数被吞入 hash。
 	const hashIdx = target.indexOf('#');
 	if (hashIdx >= 0) target = target.slice(0, hashIdx);
@@ -1719,6 +1742,7 @@ function documentBase(targetUrl) {
 const STRIP_FORWARDED_HEADERS = new Set([
 	'x-forwarded-host', 'x-forwarded-server', 'x-forwarded-proto',
 	'x-forwarded-port', 'x-forwarded-for', 'x-real-ip', 'true-client-ip', 'forwarded',
+	'x-original-host', 'x-original-url', 'x-rewrite-url', 'x-client-ip', 'via',
 ]);
 
 /** 重写转发请求中的 Referer 头，避免将代理域名泄露给源站 */
@@ -1789,7 +1813,9 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin) {
 			// 1005/1006/1015 是状态标记，不允许写入关闭帧；若状态码或超长 reason 被拒绝则优先保留状态码，再回退 1000。
 			const code = ev.code === 1005 ? 1000 : [1006, 1015].includes(ev.code) ? 1011 : ev.code;
 			try { to.close(code, ev.reason); } catch {
-				try { to.close(code); } catch { try { to.close(1000); } catch {} }
+				try { to.close(code); } catch {
+					try { to.close(1000, ev.reason); } catch { try { to.close(1000); } catch {} }
+				}
 			}
 		});
 		from.addEventListener('error', () => {
