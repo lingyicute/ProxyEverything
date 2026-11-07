@@ -736,7 +736,8 @@ var CK=${JSON.stringify(cookieNs || '')};
 function currentTarget(){
 var RAW=location.pathname.substring(1);
 var DEC;try{DEC=decodeURIComponent(RAW);}catch(e){DEC=RAW;}
-if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(DEC))DEC='https://'+DEC.replace(/^\\/+/,'');
+DEC=DEC.trim().replace(/^\\/+/,'');
+if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(DEC))DEC='https://'+DEC;
 var hIdx=DEC.indexOf('#');if(hIdx>=0)DEC=DEC.substring(0,hIdx);
 var full=DEC+(location.search?(DEC.indexOf('?')>=0?'&':'?')+location.search.substring(1):'');
 try{var u=new URL(full);if(u.protocol==='ws:')u.protocol='http:';else if(u.protocol==='wss:')u.protocol='https:';u.username='';u.password='';u.hostname=u.hostname.toLowerCase().replace(/\\.+$/,'');return u.href;}catch(e){return full;}
@@ -769,36 +770,40 @@ function rp(v){
       var locH=(location.hostname||'').toLowerCase().replace(/\\.+$/,'');
       if(puH&&puH===locH&&pu.port===(location.port||'')){
         if(PROXY_RE.test(pu.pathname)){
-          if(pu.hostname!==location.hostname){pu.hostname=location.hostname;return pu.href;}
-          return s.indexOf('//')===0?pu.href:s;
+          if(pu.protocol==='ws:'||pu.protocol==='wss:'){
+            if(pu.hostname!==location.hostname)pu.hostname=location.hostname;
+            return pu.href;
+          }
+          return WO+pu.pathname+pu.search+pu.hash;
         }
         if(pu.protocol==='ws:'||pu.protocol==='wss:')forcedWs=pu.protocol;
         s=pu.pathname+pu.search+pu.hash;
       }
     }
   }catch(e){}
-  var abs;try{abs=new URL(s,base()).href;}catch(e){return s;}
-  if(abs.indexOf(WO+'/')===0&&PROXY_RE.test(abs.substring(WO.length)))return abs;
-  if(ABS_RE.test(abs)){
-    var u;try{u=new URL(abs);}catch(e){return s;}
-    var uh=u.hostname.toLowerCase().replace(/\\.+$/,'');
-    if(uh){try{u.hostname=uh;}catch(e){}}
-    var p=forcedWs?(u.protocol==='http:'?'ws:':'wss:'):u.protocol;
-    if(p!=='http:'&&p!=='https:'&&p!=='ws:'&&p!=='wss:')return s;
-    return WO+'/'+encodeURIComponent(p+'//'+u.host+u.pathname)+u.search+u.hash;
-  }
-  return abs;
+  var u;try{u=new URL(s,base());}catch(e){return s;}
+  if(u.origin===WO&&PROXY_RE.test(u.pathname))return u.href;
+  var p=forcedWs?(u.protocol==='http:'?'ws:':'wss:'):u.protocol;
+  if(p!=='http:'&&p!=='https:'&&p!=='ws:'&&p!=='wss:')return s;
+  var uh=u.hostname.toLowerCase().replace(/\\.+$/,'');
+  if(uh){try{u.hostname=uh;}catch(e){}}
+  return WO+'/'+encodeURIComponent(p+'//'+u.host+u.pathname)+u.search+u.hash;
 }
 function rwUrlArg(a){
   if(typeof a==='string')return rp(a);
   if(a instanceof URL)return new URL(rp(a.href),location.href||WO);
   return a;
 }
+function rpBase(a){
+  if(typeof a==='string'&&!a.trim())return rp(base());
+  return rwUrlArg(a);
+}
 function rwInit(init){
   if(!init||typeof init!=='object')return init;
   var ref=init.referrer;
-  if(typeof ref==='string'&&ref&&ref!=='about:client'){
-    var nr=rp(ref);
+  var refStr=ref instanceof URL?ref.href:typeof ref==='string'?ref:'';
+  if(refStr&&refStr!=='about:client'){
+    var nr=rp(refStr);
     if(nr&&nr!==ref)return Object.assign({},init,{referrer:nr});
   }
   return init;
@@ -807,30 +812,46 @@ window.__PE__={get target(){return currentTarget();},rp:rp};
 /* Request 必须在浏览器把相对地址解析到代理域之前改写；流式/POST Request 重建时需声明 duplex: 'half'，
    且 ReadableStream 正文在 Fetch 规范下不允许与 keepalive: true 或 mode: 'no-cors' 并存。 */
 var oRequest=window.Request;
-function rwReq(input,init){
-  init=rwInit(init);
-  var nu=rp(input.url);
-  if(!nu||nu===input.url)return init!==undefined?new oRequest(input,init):input;
-  var r=init!==undefined?new oRequest(input,init):input;
+function buildReq(u,r){
   var m=r.method||'GET';
-  var b=m!=='GET'&&m!=='HEAD'?r.body:undefined;
+  var mUp=String(m).toUpperCase();
+  var b=mUp!=='GET'&&mUp!=='HEAD'?r.body:undefined;
   var md=r.mode==='navigate'||(b&&r.mode==='no-cors')?'same-origin':r.mode;
-  return new oRequest(nu,{
+  var ref=r.referrer;
+  if(typeof ref==='string'&&ref&&ref!=='about:client')ref=rp(ref);
+  return new oRequest(u,{
     method:m,headers:r.headers,
     body:b,
     mode:md,
     credentials:r.credentials,cache:r.cache,redirect:r.redirect,
-    referrer:r.referrer,referrerPolicy:r.referrerPolicy,
+    referrer:ref,referrerPolicy:r.referrerPolicy,
     integrity:r.integrity,keepalive:b?false:r.keepalive,signal:r.signal,
     duplex:'half'
   });
+}
+function mergeReq(input,init){
+  if(init===undefined)return input;
+  try{return new oRequest(input,init);}catch(e){
+    var merged={};
+    ['method','headers','body','mode','credentials','cache','redirect','referrer','referrerPolicy','integrity','keepalive','signal'].forEach(function(k){
+      merged[k]=init[k]!==undefined?init[k]:input[k];
+    });
+    return buildReq(input.url,merged);
+  }
+}
+function rwReq(input,init){
+  init=rwInit(init);
+  var nu=rp(input.url);
+  if(!nu||nu===input.url)return mergeReq(input,init);
+  var r=mergeReq(input,init);
+  return buildReq(nu,r);
 }
 if(oRequest){
   var ProxyRequest=function(input,init){
     if(!new.target)throw new TypeError('Request requires new');
     init=rwInit(init);
     if(input&&typeof input==='object'&&'url'in input)return rwReq(input,init);
-    input=rwUrlArg(input);
+    input=rpBase(input);
     return Reflect.construct(oRequest,[input,init],new.target);
   };
   ProxyRequest.prototype=oRequest.prototype;
@@ -842,7 +863,7 @@ var of_=window.fetch;
 if(of_)window.fetch=function(input,init){
   try{
     init=rwInit(init);
-    if(typeof input==='string')input=rp(input);
+    if(typeof input==='string')input=rpBase(input);
     else if(input instanceof URL)input=rp(input.href);
     else if(input&&typeof input==='object'&&'url'in input&&oRequest){input=rwReq(input,init);init=undefined;}
   }catch(e){}
@@ -851,14 +872,14 @@ if(of_)window.fetch=function(input,init){
 /* ---- XMLHttpRequest ---- */
 var oOpen=XMLHttpRequest.prototype.open;
 XMLHttpRequest.prototype.open=function(m,u){
-  try{arguments[1]=rwUrlArg(u);}catch(e){}
+  try{arguments[1]=rpBase(u);}catch(e){}
   return oOpen.apply(this,arguments);
 };
 /* ---- EventSource / sendBeacon / Worker / Audio / WebSocket ---- */
-if(window.EventSource){var oES=window.EventSource;var ES=function(u,c){return new oES(rwUrlArg(u),c);};ES.prototype=oES.prototype;try{Object.setPrototypeOf(ES,oES);}catch(e){}window.EventSource=ES;}
-if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{u=rp(u);}catch(e){}return oSB(u,d);};}
-if(window.Worker){var oWk=window.Worker;var Wk=function(u,o){return new oWk(rp(u),o);};Wk.prototype=oWk.prototype;try{Object.setPrototypeOf(Wk,oWk);}catch(e){}window.Worker=Wk;}
-try{if(window.SharedWorker){var oSW=window.SharedWorker;var SW=function(u,o){return new oSW(rp(u),o);};SW.prototype=oSW.prototype;try{Object.setPrototypeOf(SW,oSW);}catch(e){}window.SharedWorker=SW;}}catch(e){}
+if(window.EventSource){var oES=window.EventSource;var ES=function(u,c){var nu=rpBase(u);return arguments.length>1?new oES(nu,c):new oES(nu);};ES.prototype=oES.prototype;try{Object.setPrototypeOf(ES,oES);}catch(e){}window.EventSource=ES;}
+if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{u=typeof u==='string'&&!u.trim()?rp(base()):rp(u);}catch(e){}return arguments.length>1?oSB(u,d):oSB(u);};}
+if(window.Worker){var oWk=window.Worker;var Wk=function(u,o){var nu=rp(u);return arguments.length>1?new oWk(nu,o):new oWk(nu);};Wk.prototype=oWk.prototype;try{Object.setPrototypeOf(Wk,oWk);}catch(e){}window.Worker=Wk;}
+try{if(window.SharedWorker){var oSW=window.SharedWorker;var SW=function(u,o){var nu=rp(u);return arguments.length>1?new oSW(nu,o):new oSW(nu);};SW.prototype=oSW.prototype;try{Object.setPrototypeOf(SW,oSW);}catch(e){}window.SharedWorker=SW;}}catch(e){}
 try{if(window.Audio){var oAu=window.Audio;var Au=function(u){return arguments.length?new oAu(rp(u)):new oAu();};Au.prototype=oAu.prototype;try{Object.setPrototypeOf(Au,oAu);}catch(e){}window.Audio=Au;}}catch(e){}
 /* Service Worker 无法在代理路径下正确工作，直接禁用注册以免站点异常 */
 try{if(navigator.serviceWorker)navigator.serviceWorker.register=function(){return Promise.reject(new Error('[ProxyEverything] service worker disabled'));};}catch(e){}
@@ -870,10 +891,14 @@ if(window.WebSocket){
     try{
       if(typeof u==='string')nu=rp(u);
       else if(u instanceof URL)nu=rp(u.href);
-      if(typeof nu==='string'&&!/^wss?:\\/\\//i.test(nu)){
+      if(typeof nu==='string'){
         var au=new URL(nu,location.href||WO);
-        if(au.origin===WO||au.origin===location.origin)au.protocol=(location.protocol||au.protocol)==='https:'?'wss:':'ws:';
-        nu=au.href;
+        var auH=au.hostname.toLowerCase().replace(/\\.+$/,'');
+        var locH=(location.hostname||'').toLowerCase().replace(/\\.+$/,'');
+        if(au.origin===WO||au.origin===location.origin||(auH&&auH===locH&&au.port===(location.port||''))){
+          au.protocol=(location.protocol||au.protocol)==='https:'?'wss:':'ws:';
+          nu=au.href;
+        }
       }
     }catch(e){}
     return protos===undefined?new oWS(nu):new oWS(nu,protos);
@@ -888,9 +913,9 @@ function wrapHistory(fn){return function(st,t,u){try{if(u!=null)arguments[2]=rp(
 if(history.pushState)history.pushState=wrapHistory(history.pushState);
 if(history.replaceState)history.replaceState=wrapHistory(history.replaceState);
 var oWo=window.open;
-if(oWo)window.open=function(u){try{arguments[0]=rwUrlArg(u);}catch(e){}return oWo.apply(this,arguments);};
-try{var oAs=location.assign.bind(location);location.assign=function(u){return oAs(rp(u));};}catch(e){}
-try{var oRe=location.replace.bind(location);location.replace=function(u){return oRe(rp(u));};}catch(e){}
+if(oWo)window.open=function(u){try{if(arguments.length&&u!=null)arguments[0]=rwUrlArg(u);}catch(e){}return oWo.apply(this,arguments);};
+try{var oAs=location.assign.bind(location);location.assign=function(u){return oAs(typeof u==='string'&&!u.trim()?rp(base()):rp(u));};}catch(e){}
+try{var oRe=location.replace.bind(location);location.replace=function(u){return oRe(typeof u==='string'&&!u.trim()?rp(base()):rp(u));};}catch(e){}
 /* ---- DOM 属性 setter 拦截：img.src = "..." 等动态赋值 ---- */
 function rwPing(v){
   if(typeof v!=='string')return v;
@@ -987,6 +1012,7 @@ var HREF_TAGS={A:1,LINK:1,AREA:1,SCRIPT:1,IMAGE:1,USE:1,FEIMAGE:1,MPATH:1,TEXTPA
 if(window.Element){
   var oSA=Element.prototype.setAttribute;
   var oRA=Element.prototype.removeAttribute;
+  var oRANS=Element.prototype.removeAttributeNS;
   Element.prototype.setAttribute=function(n,v){
     try{
       if(typeof n==='string'&&v!=null){
@@ -998,9 +1024,15 @@ if(window.Element){
           return;
         }
         if(ln==='href'&&tag==='BASE'){
-          var bUrl=new URL(sv,currentTarget());
-          if(bUrl.protocol==='http:'||bUrl.protocol==='https:')oSA.call(this,'data-pe-base',bUrl.href);
-          else if(oRA)oRA.call(this,'data-pe-base');
+          var bOk=false;
+          try{
+            var bUrl=new URL(sv,currentTarget());
+            if(bUrl.protocol==='http:'||bUrl.protocol==='https:'){
+              oSA.call(this,'data-pe-base',bUrl.href);
+              bOk=true;
+            }
+          }catch(e){}
+          if(!bOk&&oRA)oRA.call(this,'data-pe-base');
           if(oRA)oRA.call(this,'href');
           return;
         }
@@ -1018,7 +1050,9 @@ if(window.Element){
     try{
       if(typeof n==='string'&&v!=null){
         var ln=n.toLowerCase();
-        var local=ln.indexOf(':')>=0?ln.split(':')[1]:ln;
+        var colon=ln.indexOf(':');
+        var prefix=colon>=0?ln.slice(0,colon):'';
+        var local=prefix==='xlink'?ln.slice(6):ln;
         var sv=v instanceof URL?v.href:String(v);
         var tag=(this.tagName||'').toUpperCase();
         if(local==='integrity'&&(tag==='SCRIPT'||tag==='LINK')){
@@ -1026,9 +1060,15 @@ if(window.Element){
           return;
         }
         if(local==='href'&&tag==='BASE'){
-          var bUrl=new URL(sv,currentTarget());
-          if(bUrl.protocol==='http:'||bUrl.protocol==='https:')oSA.call(this,'data-pe-base',bUrl.href);
-          else if(oRA)oRA.call(this,'data-pe-base');
+          var bOk=false;
+          try{
+            var bUrl=new URL(sv,currentTarget());
+            if(bUrl.protocol==='http:'||bUrl.protocol==='https:'){
+              oSA.call(this,'data-pe-base',bUrl.href);
+              bOk=true;
+            }
+          }catch(e){}
+          if(!bOk&&oRA)oRA.call(this,'data-pe-base');
           if(oRA)oRA.call(this,'href');
           return;
         }
@@ -1047,6 +1087,14 @@ if(window.Element){
       }
     }catch(e){}
     return oRA.apply(this,arguments);
+  };
+  if(oRANS)Element.prototype.removeAttributeNS=function(ns,n){
+    try{
+      if(typeof n==='string'&&(n.toLowerCase()==='href'||n.toLowerCase()==='xlink:href')&&(this.tagName||'').toUpperCase()==='BASE'){
+        if(oRA)oRA.call(this,'data-pe-base');
+      }
+    }catch(e){}
+    return oRANS.apply(this,arguments);
   };
 }
 /* ---- document.cookie：读写都按站点命名空间转换 ----
@@ -1087,9 +1135,9 @@ function rwLinkEv(ev){
     var el=ev.target&&ev.target.closest?ev.target.closest('a,area'):null;
     if(!el)return;
     var h=el.getAttribute('href');
-    if(h!==null){var p=rp(h||base());if(p&&p!==h)el.setAttribute('href',p);}
+    if(h!==null){var p=rp(h.trim()||base());if(p&&p!==h)el.setAttribute('href',p);}
     var xh=el.getAttribute('xlink:href');
-    if(xh){var px=rp(xh);if(px&&px!==xh)el.setAttribute('xlink:href',px);}
+    if(xh!==null){var px=rp(xh.trim()||base());if(px&&px!==xh)el.setAttribute('xlink:href',px);}
     var pg=el.getAttribute('ping');
     if(pg){var ppg=rwPing(pg);if(ppg&&ppg!==pg)el.setAttribute('ping',ppg);}
   }catch(e){}
@@ -1100,15 +1148,16 @@ document.addEventListener('contextmenu',rwLinkEv,true);
 function rwForm(f,sub){
   try{
     if(!f||(f.tagName||'').toUpperCase()!=='FORM')return;
-    var m=(f.getAttribute('method')||'').toLowerCase();
+    var m=(f.getAttribute('method')||'').trim().toLowerCase();
     var a=f.getAttribute('action');
-    if(a){var p=rp(a);if(p&&p!==a)f.setAttribute('action',p);}
-    else if(m!=='dialog'&&(a===''||document.querySelector('base[data-pe-base],base[href]'))){
+    var at=a!==null?a.trim():null;
+    if(at){var p=rp(at);if(p&&p!==a)f.setAttribute('action',p);}
+    else if(m!=='dialog'&&(at===''||document.querySelector('base[data-pe-base],base[href]'))){
       f.setAttribute('action',rp(base()));
     }
     if(sub&&sub.getAttribute){
       var fa=sub.getAttribute('formaction');
-      if(fa){var pfa=rp(fa);if(pfa&&pfa!==fa)sub.setAttribute('formaction',pfa);}
+      if(fa!==null){var pfa=rp(fa.trim()||base());if(pfa&&pfa!==fa)sub.setAttribute('formaction',pfa);}
     }
   }catch(e){}
 }
@@ -2432,12 +2481,12 @@ try{
   var root=document.documentElement;
   var saved=null;
   try{saved=localStorage.getItem('pe-theme');}catch(e){}
-  var dark=saved?saved==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+  var dark=(saved==='dark'||saved==='light')?saved==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
   root.setAttribute('data-theme',dark?'dark':'light');
   var h=null;
   try{h=localStorage.getItem('pe-hue');}catch(e){}
   var hn=parseFloat(h);
-  if(Number.isFinite(hn)){root.style.setProperty('--hue',String(hn));root.style.setProperty('--hue3',String((hn+60)%360));}
+  if(Number.isFinite(hn)){hn=((hn%360)+360)%360;root.style.setProperty('--hue',String(hn));root.style.setProperty('--hue3',String((hn+60)%360));}
 }catch(e){}
 })();`;
 
@@ -2456,7 +2505,7 @@ if(themeBtn)themeBtn.addEventListener('click',function(){
 try{
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',function(e){
     var saved=null;try{saved=localStorage.getItem('pe-theme');}catch(_){}
-    if(!saved)document.documentElement.setAttribute('data-theme',e.matches?'dark':'light');
+    if(saved!=='dark'&&saved!=='light')document.documentElement.setAttribute('data-theme',e.matches?'dark':'light');
   });
 }catch(e){}
 /* 涟漪 */
@@ -2613,11 +2662,27 @@ ${md3Overlays()}
   form.addEventListener('submit',function(e){
     e.preventDefault();
     var v=input.value.trim();
-    if(/^(?:\\/+)?(?:https?|wss?)%3A%2F%2F/i.test(v)){
+    var selfH=location.hostname.toLowerCase().replace(/\\.+$/,'');
+    if(/^(?:https?:)?\\/\\//i.test(v)){
+      try{
+        var u0=new URL(v,location.href);
+        if(u0.hostname.toLowerCase().replace(/\\.+$/,'')===selfH&&u0.port===location.port&&
+           /^\\/(https?|wss?)(?:%3A|:)(?:%2F|\\/){2}/i.test(u0.pathname)){
+          v=u0.pathname+u0.search+u0.hash;
+        }
+      }catch(_){}
+    }
+    if(/^(?:\\/+)?(?:https?|wss?)(?:%3A|:)(?:%2F|\\/){2}/i.test(v)){
       var qIdx=v.search(/[?#]/);
       var pPart=qIdx>=0?v.slice(0,qIdx):v;
       var sPart=qIdx>=0?v.slice(qIdx):'';
-      try{v=decodeURIComponent(pPart.replace(/^\\/+/,''))+sPart;}catch(_){}
+      try{
+        var dec=decodeURIComponent(pPart.replace(/^\\/+/,''));
+        var hIdx=dec.indexOf('#');
+        if(hIdx>=0)dec=dec.slice(0,hIdx);
+        if(sPart.charAt(0)==='?'&&dec.indexOf('?')>=0)sPart='&'+sPart.slice(1);
+        v=dec+sPart;
+      }catch(_){}
     }
     if(/^[a-z][a-z0-9+.-]*:/i.test(v)&&!/^https?:\\/\\//i.test(v)&&!/^[a-z0-9.-]+:\\d+(?:[/?#]|$)/i.test(v)){
       window.__peSnack('仅支持 http:// 或 https:// 网址');
@@ -2640,17 +2705,12 @@ ${md3Overlays()}
       input.focus();
       return;
     }
-    var selfH=location.hostname.toLowerCase().replace(/\\.+$/,'');
-    var nextHref='/'+encodeURIComponent(u.protocol+'//'+u.host+u.pathname)+u.search+u.hash;
     if(h===selfH&&u.port===location.port){
-      if(/^\\/(https?|wss?)(?:%3A|:)(?:%2F|\\/){2}/i.test(u.pathname)){
-        nextHref=u.pathname+u.search+u.hash;
-      }else{
-        window.__peSnack('不允许代理本站自身');
-        input.focus();
-        return;
-      }
+      window.__peSnack('不允许代理本站自身');
+      input.focus();
+      return;
     }
+    var nextHref='/'+encodeURIComponent(u.protocol+'//'+u.host+u.pathname)+u.search+u.hash;
     window.__peBusy(true);
     setTimeout(function(){
       location.href=nextHref;
