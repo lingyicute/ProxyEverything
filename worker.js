@@ -636,14 +636,23 @@ async function sniffHtmlCharset(body, declaredCharset = null) {
 				const valid = normalizeCharsetLabel(xml[1], false);
 				if (valid) { charset = valid; break; }
 			}
-			// 不把分片边界处尚未闭合的属性值当成完整编码名；忽略不受支持的编码名或非 content-type 的 http-equiv。
-			for (const [tag] of text.matchAll(/<meta\b[^>]{0,300}>/gi)) {
-				const he = /\bhttp-equiv\s*=\s*["']?\s*([a-z0-9_-]+)/i.exec(tag);
-				if (he && he[1].toLowerCase() !== 'content-type') continue;
-				const m = /\bcharset\s*=\s*["']?\s*([a-z0-9_\-:.]+)(?=[\s"'/>;])/i.exec(tag);
-				if (m) {
-					const valid = normalizeCharsetLabel(m[1], true);
+			// 不把分片边界处尚未闭合的属性值当成完整编码名；仅采纳直接 charset 属性或 http-equiv=content-type 的 content。
+			for (const [, rawAttrs] of text.matchAll(/<meta\b((?:[^>"']|"[^"]*"|'[^']*'){0,500}?)\s*\/?>/gi)) {
+				const attrs = {};
+				for (const [, k, dq, sq, uq] of rawAttrs.matchAll(/([a-z0-9_-]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+)))?/gi)) {
+					const name = k.toLowerCase();
+					if (!(name in attrs)) attrs[name] = dq ?? sq ?? uq ?? '';
+				}
+				if (attrs.charset) {
+					const valid = normalizeCharsetLabel(attrs.charset.replace(/\/+$/, ''), true);
 					if (valid) { charset = valid; break; }
+				}
+				if ((attrs['http-equiv'] || '').trim().toLowerCase() === 'content-type' && attrs.content) {
+					const m = /charset\s*=\s*["']?\s*([a-z0-9_\-:.]+)\s*["']?/i.exec(attrs.content);
+					if (m) {
+						const valid = normalizeCharsetLabel(m[1], true);
+						if (valid) { charset = valid; break; }
+					}
 				}
 			}
 			if (charset) break;
@@ -1226,12 +1235,13 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 		},
 	});
 
-	// CSP/Set-Cookie/X-Frame-Options meta 标签直接移除；refresh meta 重写目标；charset meta 对齐为 UTF-8
+	// CSP/Set-Cookie/X-Frame-Options/referrer meta 标签直接移除；refresh meta 重写目标；charset meta 对齐为 UTF-8
 	rewriter.on('meta', {
 		element(el) {
 			const he = (el.getAttribute('http-equiv') || '').trim().toLowerCase();
+			const name = (el.getAttribute('name') || '').trim().toLowerCase();
 			if (he === 'content-security-policy' || he === 'content-security-policy-report-only' ||
-				he === 'set-cookie' || he === 'x-frame-options') {
+				he === 'set-cookie' || he === 'x-frame-options' || name === 'referrer') {
 				el.remove();
 				return;
 			}
@@ -1255,7 +1265,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 		(text, kind) => kind === 'importmap'
 			? rewriteImportMap(text, baseHref, workerOrigin)
 			: kind === 'speculationrules'
-				? rewriteSpeculationRules(text, baseHref, workerOrigin)
+				? rewriteSpeculationRules(text, baseHref, workerOrigin, baseUrl)
 				: rewriteJsModuleSpecifiers(text, baseHref, workerOrigin),
 		el => {
 			if (el.hasAttribute('src') || el.hasAttribute('href') || el.hasAttribute('xlink:href')) return null;
@@ -1270,6 +1280,11 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			element(el) {
 				// 内容被我们改写过的资源必须去掉 SRI，否则哈希校验失败被浏览器拦截
 				if (tag === 'script' || tag === 'link') el.removeAttribute('integrity');
+				const isDialogForm = tag === 'form' &&
+					(el.getAttribute('method') || '').trim().toLowerCase() === 'dialog';
+				if (tag === 'form' && !isDialogForm && hasBaseHref && !el.hasAttribute('action')) {
+					el.setAttribute('action', rw(baseHref));
+				}
 				for (const [attr, kind] of Object.entries(attrs)) {
 					const v = el.getAttribute(attr);
 					if (v == null) continue;
@@ -1278,6 +1293,9 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 					} else if (kind === 'ping') {
 						const trimmed = v.trim();
 						if (trimmed) el.setAttribute(attr, trimmed.split(/\s+/).map(rw).join(' '));
+					} else if (!v.trim() && ((tag === 'form' && !isDialogForm) ||
+						(hasBaseHref && (attr === 'href' || attr === 'action' || attr === 'formaction')))) {
+						el.setAttribute(attr, rw(baseHref));
 					} else {
 						el.setAttribute(attr, rw(v));
 					}
@@ -1287,7 +1305,13 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 		});
 	}
 
-	// 通配：style 属性、懒加载 data-* 属性
+	const BG_TAGS = new Set(['body', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th']);
+	const SVG_URL_ATTRS = [
+		'fill', 'stroke', 'filter', 'clip-path', 'mask',
+		'marker', 'marker-start', 'marker-mid', 'marker-end', 'cursor',
+	];
+
+	// 通配：style 属性、表格/页面 background、SVG url() 表现属性、懒加载 data-* 属性
 	rewriter.on('*', {
 		element(el) {
 			// 兜底注入：源文档既没有 <head> 也没有 <body> 起始标签时
@@ -1304,6 +1328,16 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			if (st) {
 				el.setAttribute('style', rewriteStyleAttr(st, baseHref, workerOrigin));
 			}
+			if (BG_TAGS.has(tag)) {
+				const bg = el.getAttribute('background');
+				if (bg) el.setAttribute('background', rw(bg));
+			}
+			for (const attr of SVG_URL_ATTRS) {
+				const v = el.getAttribute(attr);
+				if (v && /(?:url|-webkit-image-set|image-set)\s*\(/i.test(v)) {
+					el.setAttribute(attr, rewriteStyleAttr(v, baseHref, workerOrigin));
+				}
+			}
 			for (const attr of LAZY_ATTRS) {
 				const v = el.getAttribute(attr);
 				if (v == null) continue;
@@ -1314,8 +1348,8 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 
 	const out = rewriter.transform(response);
 	// HTMLRewriter 输出统一为 UTF-8
-	const ct = out.headers.get('content-type') || 'text/html';
-	out.headers.set('content-type', ct.split(';')[0] + '; charset=UTF-8');
+	const ct = (out.headers.get('content-type') || 'text/html').split(';')[0].trim();
+	out.headers.set('content-type', (ct || 'text/html') + '; charset=UTF-8');
 	return out;
 }
 
@@ -1342,8 +1376,8 @@ function sniffTextChunkCharset(chunks, kind, declaredCharset = null) {
 	if (declaredCharset) return declaredCharset;
 	if (kind === 'css' && total >= 12) {
 		const ascii = new TextDecoder().decode(head.subarray(0, total));
-		const m = /^@charset\s+"([^"]{1,64})";/i.exec(ascii);
-		if (m) return normalizeCharsetLabel(m[1], true) || 'utf-8';
+		const m = /^@charset\s+(?:"([^"]{1,64})"|'([^']{1,64})')\s*;/i.exec(ascii);
+		if (m) return normalizeCharsetLabel(m[1] || m[2], true) || 'utf-8';
 	}
 	if (kind === 'svg' && total >= 20) {
 		const ascii = new TextDecoder().decode(head.subarray(0, total));
@@ -1354,7 +1388,7 @@ function sniffTextChunkCharset(chunks, kind, declaredCharset = null) {
 }
 
 async function readTransformText(body, kind = '', declaredCharset = null) {
-	if (!body) return { text: '', passthrough: null };
+	if (!body) return { text: '', passthrough: null, charset: declaredCharset || 'utf-8' };
 	const reader = body.getReader();
 	const chunks = [];
 	let bytes = 0;
@@ -1366,6 +1400,7 @@ async function readTransformText(body, kind = '', declaredCharset = null) {
 			bytes += value.byteLength;
 			if (bytes > MAX_TRANSFORM_BYTES) {
 				handedOff = true;
+				const effectiveCharset = sniffTextChunkCharset([...chunks, value], kind, declaredCharset);
 				const passthrough = new ReadableStream({
 					start(controller) {
 						for (const c of chunks) controller.enqueue(c);
@@ -1386,15 +1421,16 @@ async function readTransformText(body, kind = '', declaredCharset = null) {
 						try { reader.releaseLock(); } catch {}
 					},
 				});
-				return { text: null, passthrough };
+				return { text: null, passthrough, charset: effectiveCharset };
 			}
 			chunks.push(value);
 		}
-		const decoder = new TextDecoder(sniffTextChunkCharset(chunks, kind, declaredCharset));
+		const effectiveCharset = sniffTextChunkCharset(chunks, kind, declaredCharset);
+		const decoder = new TextDecoder(effectiveCharset);
 		const parts = [];
 		for (const c of chunks) parts.push(decoder.decode(c, { stream: true }));
 		parts.push(decoder.decode());
-		return { text: parts.join(''), passthrough: null };
+		return { text: parts.join(''), passthrough: null, charset: effectiveCharset };
 	} catch (error) {
 		reader.cancel(error).catch(() => {});
 		throw error;
@@ -1407,13 +1443,13 @@ async function readTransformText(body, kind = '', declaredCharset = null) {
 
 async function transformText(response, baseUrl, workerOrigin, kind, request, declaredCharset = null) {
 	const charset = declaredCharset || getCharset(response.headers.get('content-type'));
-	const { text: rawText, passthrough } = await readTransformText(response.body, kind, charset);
+	const { text: rawText, passthrough, charset: effectiveCharset } = await readTransformText(response.body, kind, charset);
 	let bodyOut = passthrough;
 	if (bodyOut === null) {
 		let text = rawText;
 		try {
 			if (kind === 'css') {
-				text = rewriteCss(text, baseUrl, workerOrigin).replace(/^@charset\s+"[^"]*";/i, '@charset "UTF-8";');
+				text = rewriteCss(text, baseUrl, workerOrigin).replace(/^@charset\s+(?:"[^"]*"|'[^']*')\s*;/i, '@charset "UTF-8";');
 			} else if (kind === 'js') {
 				text = rewriteJsModuleSpecifiers(text, baseUrl, workerOrigin);
 			} else if (kind === 'svg') {
@@ -1423,16 +1459,16 @@ async function transformText(response, baseUrl, workerOrigin, kind, request, dec
 			}
 		} catch { /* 重写失败则回退原文 */ }
 		bodyOut = text;
-	} else if (charset && !isUtf8Charset(charset)) {
+	} else if (effectiveCharset && !isUtf8Charset(effectiveCharset)) {
 		try {
-			bodyOut = bodyOut.pipeThrough(new TextDecoderStream(charset)).pipeThrough(new TextEncoderStream());
+			bodyOut = bodyOut.pipeThrough(new TextDecoderStream(effectiveCharset)).pipeThrough(new TextEncoderStream());
 		} catch {}
 	}
 
 	const resp = new Response(bodyOut, response);
 	for (const h of STRIP_RESPONSE_HEADERS) resp.headers.delete(h);
 	stripTransformedHeaders(resp.headers);
-	const ct = (response.headers.get('content-type') || '').split(';')[0];
+	const ct = (response.headers.get('content-type') || '').split(';')[0].trim();
 	resp.headers.set('content-type', (ct || 'text/plain') + '; charset=UTF-8');
 	if (ENABLE_PROXY_NOINDEX) {
 		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
@@ -1494,6 +1530,7 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 	let map;
 	try { map = JSON.parse(text); } catch { return text; }
 	if (!map || typeof map !== 'object' || Array.isArray(map)) return text;
+	const isUrlLike = s => /^(?:\.\.?\/|\/|[a-z][a-z0-9+.-]*:)/i.test(s);
 	const rewriteSpecMap = (specMap) => {
 		if (!specMap || typeof specMap !== 'object' || Array.isArray(specMap)) return specMap;
 		const next = {};
@@ -1505,7 +1542,9 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 			const rwKey = /^(?:\.\.?\/|\/|https?:\/\/)/i.test(k)
 				? rewriteUrl(k, baseUrl, workerOrigin)
 				: k;
-			next[rwKey] = typeof v === 'string' ? rewriteUrl(v, baseUrl, workerOrigin) : v;
+			next[rwKey] = typeof v === 'string' && isUrlLike(v)
+				? rewriteUrl(v, baseUrl, workerOrigin)
+				: v;
 		}
 		return next;
 	};
@@ -1525,7 +1564,7 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 }
 
 /** 重写 <script type="speculationrules"> 中的预取/预渲染 URL 列表 */
-function rewriteSpeculationRules(text, baseUrl, workerOrigin) {
+function rewriteSpeculationRules(text, baseUrl, workerOrigin, docUrl = baseUrl) {
 	let spec;
 	try { spec = JSON.parse(text); } catch { return text; }
 	if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return text;
@@ -1534,7 +1573,8 @@ function rewriteSpeculationRules(text, baseUrl, workerOrigin) {
 		if (!Array.isArray(rules)) continue;
 		for (const rule of rules) {
 			if (rule && Array.isArray(rule.urls)) {
-				rule.urls = rule.urls.map(u => typeof u === 'string' ? rewriteUrl(u, baseUrl, workerOrigin) : u);
+				const ruleBase = rule.relative_to === 'document' ? docUrl : baseUrl;
+				rule.urls = rule.urls.map(u => typeof u === 'string' ? rewriteUrl(u, ruleBase, workerOrigin) : u);
 			}
 		}
 	}
@@ -1573,27 +1613,42 @@ function escapeXmlAttr(s) {
 /** 独立 SVG 文档：重写引用属性与内嵌样式，保持 XML 实体良构性 */
 function rewriteSvg(svg, baseUrl, workerOrigin) {
 	const rw = (v) => rewriteUrl(v, baseUrl, workerOrigin);
-	const rewriteTagAttrs = (tag) => tag
-		.replace(
-			/(?<![\w:-])(href|xlink:href|src)\s*=\s*("([^"]*)"|'([^']*)')/gi,
-			(m, attr, _q, dq, sq) => {
-				const raw = dq !== undefined ? dq : sq;
-				const r = rw(decodeXmlEntities(raw));
-				return `${attr}="${escapeXmlAttr(r)}"`;
-			}
-		)
-		.replace(
-			/(?<![\w:-])style\s*=\s*("([^"]*)"|'([^']*)')/gi,
-			(m, _q, dq, sq) => {
-				const raw = dq !== undefined ? dq : sq;
-				const decoded = decodeXmlEntities(raw);
-				const rewritten = rewriteStyleAttr(decoded, baseUrl, workerOrigin);
-				if (rewritten === decoded) return m;
-				return `style="${escapeXmlAttr(rewritten)}"`;
-			}
-		);
+	const rewriteTagAttrs = (tag) => {
+		let out = tag;
+		if (/^<(?:script|link)\b/i.test(out)) {
+			out = out.replace(/\s+(?<![\w:-])integrity\s*=\s*(?:"[^"]*"|'[^']*')/gi, '');
+		}
+		return out
+			.replace(
+				/(?<![\w:-])(href|xlink:href|src)\s*=\s*("([^"]*)"|'([^']*)')/gi,
+				(m, attr, _q, dq, sq) => {
+					const raw = dq !== undefined ? dq : sq;
+					const r = rw(decodeXmlEntities(raw));
+					return `${attr}="${escapeXmlAttr(r)}"`;
+				}
+			)
+			.replace(
+				/(?<![\w:-])ping\s*=\s*("([^"]*)"|'([^']*)')/gi,
+				(m, _q, dq, sq) => {
+					const raw = dq !== undefined ? dq : sq;
+					const trimmed = decodeXmlEntities(raw).trim();
+					if (!trimmed) return m;
+					return `ping="${escapeXmlAttr(trimmed.split(/\s+/).map(rw).join(' '))}"`;
+				}
+			)
+			.replace(
+				/(?<![\w:-])(style|fill|stroke|filter|clip-path|mask|marker(?:-start|-mid|-end)?|cursor)\s*=\s*("([^"]*)"|'([^']*)')/gi,
+				(m, attr, _q, dq, sq) => {
+					const raw = dq !== undefined ? dq : sq;
+					const decoded = decodeXmlEntities(raw);
+					const rewritten = rewriteStyleAttr(decoded, baseUrl, workerOrigin);
+					if (rewritten === decoded) return m;
+					return `${attr}="${escapeXmlAttr(rewritten)}"`;
+				}
+			);
+	};
 	return String(svg).replace(
-		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|(<style\b(?:[^>"']|"[^"]*"|'[^']*')*>)([\s\S]*?)(<\/style>)|(<script\b(?:[^>"']|"[^"]*"|'[^']*')*>)([\s\S]*?)(<\/script>)|<[?a-zA-Z](?:[^>"']|"[^"]*"|'[^']*')*>/gi,
+		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|(<style\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)([\s\S]*?)(<\/style\s*>)|(<script\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)([\s\S]*?)(<\/script\s*>)|<[?a-zA-Z](?:[^>"']|"[^"]*"|'[^']*')*>/gi,
 		(m, styleOpen, css, styleClose, scriptOpen, scriptBody, scriptClose) => {
 			if (styleOpen) {
 				const open = rewriteTagAttrs(styleOpen);
@@ -1998,14 +2053,15 @@ Disallow: /wss%3A
 		try {
 		// ---- 按内容类型处理 ----
 		const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
+		const mime = contentType.split(';')[0].trim();
 		const fetchDest = (request.headers.get('sec-fetch-dest') || '').toLowerCase();
 		const baseUrl = documentBase(targetUrl);
-		const isHtml = contentType.includes('text/html') || contentType.includes('application/xhtml+xml');
-		const isManifest = contentType.includes('manifest+json') ||
-			(contentType.includes('json') && fetchDest === 'manifest');
-		const isTextual = isHtml || contentType.includes('text/css') || contentType.includes('javascript') ||
-			contentType.includes('ecmascript') || isManifest ||
-			contentType.includes('image/svg+xml');
+		const isHtml = mime.includes('text/html') || mime.includes('application/xhtml+xml');
+		const isManifest = mime.includes('manifest+json') ||
+			(mime.includes('json') && fetchDest === 'manifest');
+		const isTextual = isHtml || mime.includes('text/css') || mime.includes('javascript') ||
+			mime.includes('ecmascript') || isManifest ||
+			mime.includes('image/svg+xml');
 		// 透传分支不应建立转码管线，否则 upstream.body 会被锁定却仍被复用。
 		if (!isTextual) return buildResponse(upstream, request, ck);
 
@@ -2046,7 +2102,7 @@ Disallow: /wss%3A
 		// HTML：流式重写（输入统一为 UTF-8，Content-Type 同步覆盖，
 		// 避免 HTMLRewriter 按 meta 里的旧 charset 重新编码输出）
 		if (isHtml) {
-			const interim = makeInterim((contentType.split(';')[0] || 'text/html') + '; charset=UTF-8');
+			const interim = makeInterim((mime || 'text/html') + '; charset=UTF-8');
 			const result = transformHtml(interim, baseUrl, workerOrigin, ck);
 			// 补一遍统一头处理
 			if (ENABLE_PROXY_NOINDEX) {
@@ -2059,23 +2115,23 @@ Disallow: /wss%3A
 		}
 
 		// CSS
-		if (contentType.includes('text/css')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'css', request), upstream, request, ck);
+		if (mime.includes('text/css')) {
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'css', request, charset), upstream, request, ck);
 		}
 
 		// JS：基于模块 lexer 的 URL 说明符重写
-		if (contentType.includes('javascript') || contentType.includes('ecmascript')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'js', request), upstream, request, ck);
+		if (mime.includes('javascript') || mime.includes('ecmascript')) {
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'js', request, charset), upstream, request, ck);
 		}
 
 		// SVG
-		if (contentType.includes('image/svg+xml')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'svg', request), upstream, request, ck);
+		if (mime.includes('image/svg+xml')) {
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'svg', request, charset), upstream, request, ck);
 		}
 
 		// Web App Manifest（图标、start_url 等）
 		if (isManifest) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'json', request), upstream, request, ck);
+			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'json', request, charset), upstream, request, ck);
 		}
 
 		// 其它（JSON API/图片/字体/媒体/下载等）：流式透传
