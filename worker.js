@@ -429,6 +429,13 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 				replace(valueStart, str.end, str.value);
 				i = str.end;
 			}
+		} else if (prefix === '@' && name === 'namespace') {
+			// 命名空间 URL 只是标识符，从不加载；改写会让 svg|a 这类命名空间选择器全部失配。
+			while (i < source.length && source[i] !== ';' && source[i] !== '{' && source[i] !== '}') {
+				if (source[i] === '"' || source[i] === "'") i = readCssString(source, i).end;
+				else if (source.startsWith('/*', i)) i = skipCssSpace(source, i, true);
+				else i++;
+			}
 		} else if (!prefix && name === 'url' && source[i] === '(') {
 			const url = readCssUrl(source, i + 1);
 			replace(start, url.end, url.value, true);
