@@ -37,6 +37,16 @@ test('css: every @namespace form stays literal and ends at its own terminator', 
 		`@namespace x "http://example.com/ns";@import "${proxy('c.css')}";`);
 });
 
+test('css: url() inside @namespace is opaque, including ; and /* in unquoted URLs', () => {
+	const input = [
+		'@namespace /* c */ x URL( http://example.org/x;y );',
+		'@namespace u url(http://example.org/a;@import "z.css";b);',
+		'@namespace w url(http://example.org/*not-a-comment);',
+	].join('\n');
+	assert.equal(rewriteCss(input + '\n.a{background:url(b.png)}', base, origin),
+		input + `\n.a{background:url(\"${proxy('b.png')}\")}`);
+});
+
 test('shim: script is valid both as HTML raw text and as XHTML CDATA content', () => {
 	const shim = getShimScript(origin, '__pe_x_');
 	assert.ok(shim.startsWith('<script>//<![CDATA[\n'));

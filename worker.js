@@ -447,6 +447,8 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 			while (i < source.length && source[i] !== ';' && source[i] !== '{' && source[i] !== '}') {
 				if (source[i] === '"' || source[i] === "'") i = readCssString(source, i).end;
 				else if (source.startsWith('/*', i)) i = skipCssSpace(source, i, true);
+				// 未加引号的 url() 内 ; 与 /* 都是 URL 的一部分，必须整体吞掉，否则前导会提前结束或被当成注释。
+				else if (/^url\(/i.test(source.slice(i, i + 4)) && !isNameCode(source.charCodeAt(i - 1))) i = readCssUrl(source, i + 4).end;
 				else i++;
 			}
 		} else if (!prefix && name === 'url' && source[i] === '(') {
