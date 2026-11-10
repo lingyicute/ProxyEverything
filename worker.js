@@ -1638,6 +1638,11 @@ function rewriteJsModuleSpecifiers(js, baseUrl, workerOrigin) {
 	return parts.join('');
 }
 
+/** script raw-text 不解析 HTML 实体；用 JSON 转义防止 < 改变 HTML 分词状态。 */
+function stringifyInlineJson(value) {
+	return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
 /** 重写 <script type="importmap">：按 HTML 规范以文档基地址解析映射并移除失效的 integrity */
 function rewriteImportMap(text, baseUrl, workerOrigin) {
 	let map;
@@ -1673,7 +1678,7 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 		map.scopes = nextScopes;
 	}
 	delete map.integrity;
-	return JSON.stringify(map);
+	return stringifyInlineJson(map);
 }
 
 /** 重写 <script type="speculationrules"> 中的预取/预渲染 URL 列表 */
@@ -1691,7 +1696,7 @@ function rewriteSpeculationRules(text, baseUrl, workerOrigin, docUrl = baseUrl) 
 			}
 		}
 	}
-	return JSON.stringify(spec);
+	return stringifyInlineJson(spec);
 }
 
 function isValidXmlCodePoint(code) {
