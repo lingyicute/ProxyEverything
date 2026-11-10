@@ -1988,21 +1988,28 @@ const STRIP_FORWARDED_HEADERS = new Set([
 	'cdn-loop', 'x-real-port', 'x-scheme', 'x-forwarded-ssl', 'front-end-https', 'fastly-client-ip',
 ]);
 
-/** 重写转发请求中的 Referer 头，避免将代理域名泄露给源站 */
-function resolveUpstreamReferer(request, workerOrigin, fallbackUrl) {
+/** 从 Referer 还原发起请求的目标页面 URL（ws/wss 归一为 http/https）；缺失或不是合法代理地址时返回 null */
+function refererTarget(request, workerOrigin) {
 	const referer = request.headers.get('referer');
-	if (!referer) return fallbackUrl;
+	if (!referer) return null;
 	try {
 		const rUrl = new URL(referer);
 		const rTarget = isWorkerHost(rUrl, workerOrigin) ? parseTarget(rUrl) : null;
 		if (rTarget && !isWorkerHost(rTarget, workerOrigin) && !targetPolicyError(rTarget)) {
 			if (rTarget.protocol === 'ws:') rTarget.protocol = 'http:';
 			else if (rTarget.protocol === 'wss:') rTarget.protocol = 'https:';
-			// 浏览器默认 strict-origin-when-cross-origin：跨源请求只带来源，不向第三方泄露来源页的路径与查询串。
-			return rTarget.origin === new URL(fallbackUrl).origin ? rTarget.href : rTarget.origin + '/';
+			return rTarget;
 		}
 	} catch {}
-	return fallbackUrl;
+	return null;
+}
+
+/** 重写转发请求中的 Referer 头，避免将代理域名泄露给源站 */
+function resolveUpstreamReferer(request, workerOrigin, fallbackUrl) {
+	const rTarget = refererTarget(request, workerOrigin);
+	if (!rTarget) return fallbackUrl;
+	// 浏览器默认 strict-origin-when-cross-origin：跨源请求只带来源，不向第三方泄露来源页的路径与查询串。
+	return rTarget.origin === new URL(fallbackUrl).origin ? rTarget.href : rTarget.origin + '/';
 }
 
 // ============================================================
@@ -2134,6 +2141,19 @@ Disallow: /wss%3A
 `,
 				{ headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=86400' } }
 			);
+		}
+
+		// ---- 漏网的站内相对请求：innerHTML、location.href = '/x'、Worker 内请求、默认 /favicon.ico 等未经改写的地址
+		//      会直接落到代理域。路径不带协议而 Referer 是代理页面时，按来源页的目标站点还原并重定向 ----
+		if (!/^(?:https?|wss?):\/\//i.test(safeDecode(url.pathname.substring(1)).trim().replace(/^\/+/, ''))) {
+			const refTarget = refererTarget(request, workerOrigin);
+			if (refTarget) {
+				const leaked = new URL(url.pathname.replace(/^\/+/, '/') + url.search, refTarget);
+				return new Response(null, {
+					status: 307,
+					headers: { 'Location': toProxyUrl(leaked.href, workerOrigin), 'Cache-Control': 'no-store' },
+				});
+			}
 		}
 
 		// ---- favicon 等杂项，避免被当成目标域名 ----
