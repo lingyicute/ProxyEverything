@@ -1651,7 +1651,8 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 	const isUrlLike = s => /^(?:\.\.?\/|\/|[a-z][a-z0-9+.-]*:)/i.test(s);
 	const rewriteSpecMap = (specMap) => {
 		if (!specMap || typeof specMap !== 'object' || Array.isArray(specMap)) return specMap;
-		const next = {};
+		// 模块名是任意 JSON 键，__proto__ 也必须作为普通属性保留。
+		const next = Object.create(null);
 		for (const [k, v] of Object.entries(specMap)) {
 			if (k.endsWith('/')) {
 				next[k] = v;

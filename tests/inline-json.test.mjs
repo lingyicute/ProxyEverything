@@ -105,3 +105,25 @@ test('speculationrules: preserves selectors and both URL resolution bases', () =
 		prerender: value.prerender,
 	});
 });
+
+for (const scope of ['imports', 'scopes']) {
+	for (const [label, value, expected] of [
+		['relative URL', './entry.js', proxy('/assets/entry.js')],
+		['blocked mapping', null, null],
+		['data URL', 'data:text/javascript,export default 1', 'data:text/javascript,export default 1'],
+	]) {
+		test(`importmap: retains __proto__ ${label} in ${scope}`, () => {
+			// A computed key creates a JSON data property, not an object-literal prototype setter.
+			const entries = { ['__proto__']: value, constructor: './constructor.js', toString: './string.js' };
+			const map = scope === 'imports' ? { imports: entries } : { scopes: { './page.html': entries } };
+			const output = JSON.parse(rewriteImportMap(JSON.stringify(map), base, origin));
+			const actual = scope === 'imports' ? output.imports : output.scopes[proxy('/assets/page.html')];
+			assert.ok(Object.hasOwn(actual, '__proto__'), 'the module key must not disappear');
+			assert.deepEqual(actual, {
+				['__proto__']: expected,
+				constructor: proxy('/assets/constructor.js'),
+				toString: proxy('/assets/string.js'),
+			});
+		});
+	}
+}
