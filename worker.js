@@ -776,7 +776,10 @@ function applyCachePolicy(response, request, ck) {
 // ============================================================
 
 function getShimScript(workerOrigin, cookieNs) {
-	return `<script>(function(){
+	// application/xhtml+xml 按 XML 解析，脚本里的 && 与 < 会让整页解析失败；
+	// CDATA 守卫在 HTML 中只是行注释，在 XHTML 中则保护脚本正文。
+	return `<script>//<![CDATA[
+(function(){
 try{
 var WO=${JSON.stringify(workerOrigin)};
 var WOU=new URL(WO);
@@ -1266,7 +1269,8 @@ if(window.HTMLFormElement&&HTMLFormElement.prototype){
   if(oRSub)HTMLFormElement.prototype.requestSubmit=function(sub){rwForm(this,sub);return oRSub.apply(this,arguments);};
 }
 }catch(e){try{console.error('[ProxyEverything] shim error',e);}catch(_){}}
-})();</script>`;
+})();
+//]]></script>`;
 }
 
 // ============================================================
