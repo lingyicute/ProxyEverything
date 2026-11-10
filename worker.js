@@ -2,9 +2,11 @@
  * ProxyEverything — 通用网页反向代理 Cloudflare Worker
  *
  * URL 方案：
- *   https://proxy-any.92li.uk/<encodeURIComponent(目标URL的路径部分)>?目标查询串
+ *   https://proxy-any.92li.uk/<encodeURIComponent(协议 + '//' + 主机)>/路径?目标查询串
+ *   路径分隔符 / 保持原样，其余路径段分别用 encodeURIComponent 编码。
  *   例：https://example.com/page?a=1
- *     → https://proxy-any.92li.uk/https%3A%2F%2Fexample.com%2Fpage?a=1
+ *     → https://proxy-any.92li.uk/https%3A%2F%2Fexample.com/page?a=1
+ *   旧版整体编码的链接（…/https%3A%2F%2Fexample.com%2Fpage）仍可解析。
  *
  * 架构：单文件、ES Module 语法，无外部依赖，可直接粘贴到 Cloudflare Dashboard，
  * 或 `wrangler deploy` 部署。
@@ -137,7 +139,10 @@ function toProxyUrl(targetUrl, workerOrigin) {
 	if (host) {
 		try { u.hostname = host; } catch {}
 	}
-	return `${workerOrigin}/${encodeURIComponent(u.protocol + '//' + u.host + u.pathname)}${u.search}${u.hash}`;
+	// 路径分隔符保持字面量，import map 前缀与相对模块 URL 才能在代理路径下正确匹配；
+	// 逐段编码，使上游路径中的 %2F 经过一次解码后仍保持编码。
+	const path = u.pathname.split('/').map(encodeURIComponent).join('/');
+	return `${workerOrigin}/${encodeURIComponent(u.protocol + '//' + u.host)}${path}${u.search}${u.hash}`;
 }
 
 /**
@@ -855,7 +860,7 @@ function rp(v){
   if(p!=='http:'&&p!=='https:'&&p!=='ws:'&&p!=='wss:')return s;
   var uh=u.hostname.toLowerCase().replace(/\\.+$/,'');
   if(uh){try{u.hostname=uh;}catch(e){}}
-  return WO+'/'+encodeURIComponent(p+'//'+u.host+u.pathname)+u.search+u.hash;
+  return WO+'/'+encodeURIComponent(p+'//'+u.host)+u.pathname.split('/').map(encodeURIComponent).join('/')+u.search+u.hash;
 }
 function rwUrlArg(a){
   if(typeof a==='string')return rp(a);
@@ -1699,10 +1704,6 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 		// 模块名是任意 JSON 键，__proto__ 也必须作为普通属性保留。
 		const next = Object.create(null);
 		for (const [k, v] of Object.entries(specMap)) {
-			if (k.endsWith('/')) {
-				next[k] = v;
-				continue;
-			}
 			const rwKey = /^(?:\.\.?\/|\/|https?:\/\/)/i.test(k)
 				? rewriteUrl(k, baseUrl, workerOrigin)
 				: k;
@@ -1718,8 +1719,8 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 	if (map.scopes && typeof map.scopes === 'object' && !Array.isArray(map.scopes)) {
 		const nextScopes = {};
 		for (const [scopeKey, specMap] of Object.entries(map.scopes)) {
-			const rwKey = scopeKey.endsWith('/') ? scopeKey : rewriteUrl(scopeKey, baseUrl, workerOrigin);
-			nextScopes[rwKey] = rewriteSpecMap(specMap);
+			// 作用域前缀同样是文档基地址下的 URL，必须与被代理的模块 URL 使用同一种形式。
+			nextScopes[rewriteUrl(scopeKey, baseUrl, workerOrigin)] = rewriteSpecMap(specMap);
 		}
 		map.scopes = nextScopes;
 	}
@@ -2897,7 +2898,7 @@ ${md3Overlays()}
       input.focus();
       return;
     }
-    var nextHref='/'+encodeURIComponent(u.protocol+'//'+u.host+u.pathname)+u.search+u.hash;
+    var nextHref='/'+encodeURIComponent(u.protocol+'//'+u.host)+u.pathname.split('/').map(encodeURIComponent).join('/')+u.search+u.hash;
     window.__peBusy(true);
     setTimeout(function(){
       location.href=nextHref;
