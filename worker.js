@@ -1993,7 +1993,8 @@ function resolveUpstreamReferer(request, workerOrigin, fallbackUrl) {
 		if (rTarget && !isWorkerHost(rTarget, workerOrigin) && !targetPolicyError(rTarget)) {
 			if (rTarget.protocol === 'ws:') rTarget.protocol = 'http:';
 			else if (rTarget.protocol === 'wss:') rTarget.protocol = 'https:';
-			return rTarget.href;
+			// 浏览器默认 strict-origin-when-cross-origin：跨源请求只带来源，不向第三方泄露来源页的路径与查询串。
+			return rTarget.origin === new URL(fallbackUrl).origin ? rTarget.href : rTarget.origin + '/';
 		}
 	} catch {}
 	return fallbackUrl;
