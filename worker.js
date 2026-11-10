@@ -368,7 +368,9 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 	let parenDepth = 0;
 	const imageSetDepths = [];
 	let expectImageSetOption = false;
-	const isName = ch => !!ch && /[a-z0-9_\-\u0080-\uffff]/i.test(ch);
+	// 热路径：按码元判断标识符字符，避免对每个字符执行一次正则（越界时 NaN 自然为 false）。
+	const isNameCode = c => (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) ||
+		c === 45 || c === 95 || c >= 0x80;
 	const replace = (start, end, value, wrapUrl = false) => {
 		if (value === null || !value) return;
 		const rewritten = rewriteUrl(value, baseUrl, workerOrigin);
@@ -417,11 +419,17 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 		const start = i;
 		const prefix = source[i] === '@' || source[i] === '#' ? source[i++] : '';
 		const nameStart = i;
-		while (isName(source[i]) || isValidCssEscape(source, i)) {
-			i = source[i] === '\\' ? cssEscapeEnd(source, i) : i + 1;
+		let escaped = false;
+		for (;;) {
+			if (isNameCode(source.charCodeAt(i))) i++;
+			else if (isValidCssEscape(source, i)) { escaped = true; i = cssEscapeEnd(source, i); }
+			else break;
 		}
 		if (i === nameStart) { i = Math.max(i, start + 1); continue; }
-		const name = decodeCssEscapes(source.slice(nameStart, i)).toLowerCase();
+		// 只有 at 规则名和函数名需要识别；其余标识符不必切片、解码、转小写。
+		if (prefix !== '@' && source[i] !== '(') continue;
+		const raw = source.slice(nameStart, i);
+		const name = (escaped ? decodeCssEscapes(raw) : raw).toLowerCase();
 		if (prefix === '@' && name === 'import') {
 			const valueStart = skipCssSpace(source, i, true);
 			if (source[valueStart] === '"' || source[valueStart] === "'") {
