@@ -92,7 +92,7 @@ function stripTransformedHeaders(headers) {
 }
 
 // 常见懒加载 data-* 属性（按需扩充）
-const LAZY_ATTRS = [
+const LAZY_ATTRS = new Set([
 	'data-src', 'data-srcset', 'data-original', 'data-original-src',
 	'data-original-set', 'data-lazy-src', 'data-lazy-srcset', 'data-lazy',
 	'data-bg', 'data-bg-src', 'data-background', 'data-background-image',
@@ -102,7 +102,7 @@ const LAZY_ATTRS = [
 	'data-audio-src', 'data-iframe', 'data-iframe-src', 'data-src-small',
 	'data-src-medium', 'data-src-large', 'data-fallback-src', 'data-high-res-src',
 	'data-low-res-src',
-];
+]);
 
 /**
  * 是否对被代理的目标网页添加 X-Robots-Tag: noindex, nofollow
@@ -1454,10 +1454,10 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 	}
 
 	const BG_TAGS = new Set(['body', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th']);
-	const SVG_URL_ATTRS = [
+	const SVG_URL_ATTRS = new Set([
 		'fill', 'stroke', 'filter', 'clip-path', 'mask',
 		'marker', 'marker-start', 'marker-mid', 'marker-end', 'cursor',
-	];
+	]);
 
 	// 通配：style 属性、表格/页面 background、SVG url() 表现属性、懒加载 data-* 属性
 	rewriter.on('*', {
@@ -1472,26 +1472,31 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 				el.before(shim, { html: true });
 			}
 
-			const st = el.getAttribute('style');
-			if (st) {
-				el.setAttribute('style', rewriteStyleAttr(st, baseHref, workerOrigin));
-			}
-			if (BG_TAGS.has(tag)) {
-				const bg = el.getAttribute('background');
-				if (bg) el.setAttribute('background', rw(bg));
-			}
-			for (const attr of SVG_URL_ATTRS) {
-				const v = el.getAttribute(attr);
-				if (v && /(?:url|-webkit-image-set|image-set)\s*\(/i.test(v)) {
-					el.setAttribute(attr, rewriteStyleAttr(v, baseHref, workerOrigin));
+			// 只遍历元素实际携带的属性：逐个 getAttribute 探测 40 多个候选名，意味着每个元素 40 多次跨运行时调用，
+			// 而绝大多数元素一个都没有。改写推迟到遍历结束后再写回，避免在迭代过程中修改属性表。
+			let handled = null;
+			let updates = null;
+			for (const [rawName, v] of el.attributes) {
+				const attr = rawName.toLowerCase();
+				const isSvgUrl = SVG_URL_ATTRS.has(attr);
+				if (attr !== 'style' && attr !== 'background' && !isSvgUrl && !LAZY_ATTRS.has(attr)) continue;
+				// 重复属性以第一个为准（与浏览器和 getAttribute 一致）
+				if (handled && handled.includes(attr)) continue;
+				(handled || (handled = [])).push(attr);
+				if (!v) continue;
+				let next = v;
+				if (attr === 'style') {
+					next = rewriteStyleAttr(v, baseHref, workerOrigin);
+				} else if (attr === 'background') {
+					if (BG_TAGS.has(tag)) next = rw(v);
+				} else if (isSvgUrl) {
+					if (/(?:url|-webkit-image-set|image-set)\s*\(/i.test(v)) next = rewriteStyleAttr(v, baseHref, workerOrigin);
+				} else {
+					next = rewriteLazyValue(attr, v, baseHref, workerOrigin);
 				}
+				if (next !== v) (updates || (updates = [])).push([attr, next]);
 			}
-			for (const attr of LAZY_ATTRS) {
-				const v = el.getAttribute(attr);
-				if (v == null) continue;
-				const next = rewriteLazyValue(attr, v, baseHref, workerOrigin);
-				if (next !== v) el.setAttribute(attr, next);
-			}
+			if (updates) for (const [attr, next] of updates) el.setAttribute(attr, next);
 		},
 	});
 
