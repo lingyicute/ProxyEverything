@@ -2177,8 +2177,13 @@ Disallow: /wss%3A
 		}
 		stripHopByHop(fwdHeaders);
 		// 伪装成直连访问：重写 Origin / Referer
-		fwdHeaders.set('Origin', targetUrl.origin);
-		fwdHeaders.set('Referer', resolveUpstreamReferer(request, workerOrigin, fetchUrl));
+		const referer = resolveUpstreamReferer(request, workerOrigin, fetchUrl);
+		// 浏览器本应携带 Origin 的请求（非 GET/HEAD 或 CORS 模式）按来源页的源回源；
+		// 一律填目标源会把跨站请求伪装成同源，绕过源站基于 Origin 的 CSRF / CORS 校验。
+		const sendsOrigin = request.headers.has('origin') ||
+			(request.headers.get('sec-fetch-mode') || '').toLowerCase() === 'cors';
+		fwdHeaders.set('Origin', sendsOrigin ? new URL(referer).origin : targetUrl.origin);
+		fwdHeaders.set('Referer', referer);
 		fwdHeaders.delete('host');
 		// Cookie 按站点隔离：只回传属于当前目标站点的那部分，并剥掉命名空间前缀
 		applyRequestCookieScope(fwdHeaders, request, ck.ns);
