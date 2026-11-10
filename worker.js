@@ -456,6 +456,21 @@ function rewriteStyleAttr(style, baseUrl, workerOrigin) {
 	return rewriteCss(style, baseUrl, workerOrigin);
 }
 
+/**
+ * 懒加载 data-* 是自由格式属性：data-lazy="true"、data-video="1"、data-background="dark"、JSON 配置等都不是 URL，
+ * 一律按 URL 改写会把页面脚本读到的业务值换成代理地址。
+ * 只改写 srcset 列表、CSS 函数写法（data-bg="url(a.jpg)"）和形似 URL 的值：
+ * 以协议/斜杠/点斜杠/问号开头，或是带路径分隔符或点号的单个记号（不含空白、引号、尖/花/方括号，且非纯数字）。
+ */
+function rewriteLazyValue(attr, value, baseUrl, workerOrigin) {
+	if (/(?:srcset|-set)$/.test(attr)) return rewriteSrcset(value, baseUrl, workerOrigin);
+	const v = value.trim();
+	if (/^[a-z-]+\(/i.test(v)) return rewriteStyleAttr(value, baseUrl, workerOrigin);
+	const urlLike = /^(?:(?:[a-z][a-z0-9+.-]*:)?\/|\.\.?\/|\?)/i.test(v) ||
+		(/[/.]/.test(v) && !/[\s"'<>{}[\]]/.test(v) && !/^[\d.]+$/.test(v));
+	return urlLike ? rewriteUrl(value, baseUrl, workerOrigin) : value;
+}
+
 /** 重写 <meta http-equiv="refresh" content="0; url=...">（兼容省略 url= 的规范写法，避免误匹配查询串内 url= 或空 url= 回溯） */
 function rewriteRefreshContent(content, baseUrl, workerOrigin) {
 	const stripQuotes = s => s.trim().replace(/^(['"])([\s\S]*?)\1[\s\S]*$/, '$2').replace(/^['"]|['"]$/g, '').trim();
@@ -1461,7 +1476,8 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			for (const attr of LAZY_ATTRS) {
 				const v = el.getAttribute(attr);
 				if (v == null) continue;
-				el.setAttribute(attr, /(?:srcset|-set)$/.test(attr) ? rewriteSrcset(v, baseHref, workerOrigin) : rw(v));
+				const next = rewriteLazyValue(attr, v, baseHref, workerOrigin);
+				if (next !== v) el.setAttribute(attr, next);
 			}
 		},
 	});
