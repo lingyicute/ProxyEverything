@@ -14,7 +14,7 @@ const base = 'https://example.com/dir/page';
 const origin = 'https://proxy.example';
 const proxy = (url) => {
 	const u = new URL(url, base);
-	return origin + '/' + encodeURIComponent(u.origin + u.pathname) + u.search;
+	return origin + '/' + encodeURIComponent(u.origin) + u.pathname.split('/').map(encodeURIComponent).join('/') + u.search;
 };
 
 test('css: @namespace URLs are identifiers and stay untouched', () => {

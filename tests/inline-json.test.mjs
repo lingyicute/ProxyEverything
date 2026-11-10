@@ -11,7 +11,7 @@ const { rewriteImportMap, rewriteSpeculationRules, bufferedTextHandler } = await
 
 const base = 'https://example.com/assets/';
 const origin = 'https://proxy.example';
-const proxy = path => origin + '/' + encodeURIComponent('https://example.com' + path);
+const proxy = path => origin + '/' + encodeURIComponent('https://example.com') + path.split('/').map(encodeURIComponent).join('/');
 const inlineJson = value => JSON.stringify(value).replace(/</g, '\\u003c');
 const payloads = [
 	['end tag', '</script><img src=x onerror=alert(1)>'],
@@ -80,7 +80,7 @@ test('importmap: keeps module keys and data URLs safe while rewriting target URL
 	const output = rewriteImportMap(inlineJson(value), base, origin);
 	assert.ok(!output.includes('<'));
 	assert.deepEqual(JSON.parse(output), {
-		imports: { [key]: proxy('/assets/entry.js'), data: dataUrl, blocked: null, 'pkg/': './pkg/' },
+		imports: { [key]: proxy('/assets/entry.js'), data: dataUrl, blocked: null, 'pkg/': proxy('/assets/pkg/') },
 		scopes: { [proxy('/assets/page.html')]: { [key]: proxy('/assets/scoped.js') } },
 	});
 });
