@@ -747,16 +747,21 @@ function buildResponse(upstream, request, ck) {
 	applyCors(resp.headers, request);
 	// Set-Cookie 添加来源命名空间，避免回源时意外混用
 	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
-	applyCachePolicy(resp, request);
+	applyCachePolicy(resp, request, ck);
 	return resp;
 }
 
 function isCacheableMethod(m) { return m === 'GET' || m === 'HEAD'; }
 
-/** 代理把不同会话映射到同一 URL；有凭证或 Set-Cookie 时不允许共享缓存。 */
-function applyCachePolicy(response, request) {
+/**
+ * 代理把不同会话映射到同一 URL；有凭证或 Set-Cookie 时不允许共享缓存。
+ * 浏览器会把代理域下所有站点的 Cookie 一并发来，只有属于当前目标来源、真正回源的那部分才算凭证；
+ * 否则任一站点写入 Cookie 后，其它目标（含无 Cookie 的静态 CDN）的响应也会全部变成 no-store。
+ */
+function applyCachePolicy(response, request, ck) {
+	const hasCookie = Boolean(request) && (ck ? ck.hasCookie : request.headers.has('cookie'));
 	if (response.status >= 500 || response.headers.has('set-cookie') ||
-		(request && (!isCacheableMethod(request.method) || request.headers.has('cookie') ||
+		(request && (!isCacheableMethod(request.method) || hasCookie ||
 		request.headers.has('authorization')))) {
 		response.headers.set('Cache-Control', 'no-store');
 		response.headers.delete('cdn-cache-control');
@@ -2187,6 +2192,8 @@ Disallow: /wss%3A
 		fwdHeaders.delete('host');
 		// Cookie 按站点隔离：只回传属于当前目标站点的那部分，并剥掉命名空间前缀
 		applyRequestCookieScope(fwdHeaders, request, ck.ns);
+		// 记录是否真的带 Cookie 回源，供缓存策略判断
+		ck.hasCookie = fwdHeaders.has('cookie');
 
 		let upstream;
 		try {
@@ -2299,7 +2306,7 @@ Disallow: /wss%3A
 			}
 			applyCors(result.headers, request);
 			rescopeSetCookies(result.headers, ck.ns, ck.isHttps);
-			applyCachePolicy(result, request);
+			applyCachePolicy(result, request, ck);
 			return result;
 		}
 
@@ -2340,7 +2347,7 @@ function applyCommon(resp, upstream, request, ck) {
 	if (ENABLE_PROXY_NOINDEX) {
 		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
 	}
-	applyCachePolicy(resp, request);
+	applyCachePolicy(resp, request, ck);
 	return resp;
 }
 
