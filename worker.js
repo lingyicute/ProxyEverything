@@ -1773,31 +1773,36 @@ function escapeXmlAttr(s) {
 /** 独立 SVG 文档：重写引用属性与内嵌样式，保持 XML 实体良构性 */
 function rewriteSvg(svg, baseUrl, workerOrigin) {
 	const rw = (v) => rewriteUrl(v, baseUrl, workerOrigin);
+	// 每个替换都先用第一分支整体吞掉其它属性的引号值：否则 onclick="location.href='/x'" 这类值内部
+	// 形似属性的文本也会被改写，并把双引号写进双引号属性值里，破坏 XML 良构性（整张 SVG 无法渲染）。
 	const rewriteTagAttrs = (tag) => {
 		let out = tag;
 		if (/^<(?:[a-z0-9_-]+:)?(?:script|link)\b/i.test(out)) {
-			out = out.replace(/\s+(?<![\w:-])integrity\s*=\s*(?:"[^"]*"|'[^']*')/gi, '');
+			out = out.replace(/"[^"]*"|'[^']*'|\s+integrity\s*=\s*(?:"[^"]*"|'[^']*')/gi, m => (/^\s/.test(m) ? '' : m));
 		}
 		return out
 			.replace(
-				/(?<![\w:-])(href|xlink:href|src|action|formaction|poster)\s*=\s*("([^"]*)"|'([^']*)')/gi,
+				/"[^"]*"|'[^']*'|(?<![\w:-])(href|xlink:href|src|action|formaction|poster)\s*=\s*("([^"]*)"|'([^']*)')/gi,
 				(m, attr, _q, dq, sq) => {
+					if (!attr) return m;
 					const raw = dq !== undefined ? dq : sq;
 					const r = rw(decodeXmlEntities(raw));
 					return `${attr}="${escapeXmlAttr(r)}"`;
 				}
 			)
 			.replace(
-				/(?<![\w:-])(srcset|imagesrcset)\s*=\s*("([^"]*)"|'([^']*)')/gi,
+				/"[^"]*"|'[^']*'|(?<![\w:-])(srcset|imagesrcset)\s*=\s*("([^"]*)"|'([^']*)')/gi,
 				(m, attr, _q, dq, sq) => {
+					if (!attr) return m;
 					const raw = dq !== undefined ? dq : sq;
 					const r = rewriteSrcset(decodeXmlEntities(raw), baseUrl, workerOrigin);
 					return `${attr}="${escapeXmlAttr(r)}"`;
 				}
 			)
 			.replace(
-				/(?<![\w:-])ping\s*=\s*("([^"]*)"|'([^']*)')/gi,
-				(m, _q, dq, sq) => {
+				/"[^"]*"|'[^']*'|(?<![\w:-])ping\s*=\s*("([^"]*)"|'([^']*)')/gi,
+				(m, q, dq, sq) => {
+					if (!q) return m;
 					const raw = dq !== undefined ? dq : sq;
 					const trimmed = decodeXmlEntities(raw).trim();
 					if (!trimmed) return m;
@@ -1805,8 +1810,9 @@ function rewriteSvg(svg, baseUrl, workerOrigin) {
 				}
 			)
 			.replace(
-				/(?<![\w:-])(style|fill|stroke|filter|clip-path|mask|marker(?:-start|-mid|-end)?|cursor)\s*=\s*("([^"]*)"|'([^']*)')/gi,
+				/"[^"]*"|'[^']*'|(?<![\w:-])(style|fill|stroke|filter|clip-path|mask|marker(?:-start|-mid|-end)?|cursor)\s*=\s*("([^"]*)"|'([^']*)')/gi,
 				(m, attr, _q, dq, sq) => {
+					if (!attr) return m;
 					const raw = dq !== undefined ? dq : sq;
 					const decoded = decodeXmlEntities(raw);
 					const rewritten = rewriteStyleAttr(decoded, baseUrl, workerOrigin);
