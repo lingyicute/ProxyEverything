@@ -356,12 +356,15 @@ function readCssUrl(css, start) {
 		const str = readCssString(css, i);
 		i = skipCssSpace(css, str.end, true);
 		if (str.value !== null && css[i] === ')') return { end: i + 1, value: str.value };
-		while (i < css.length && css[i] !== ')') {
+		let depth = 1;
+		while (i < css.length && depth > 0) {
 			if (css[i] === '"' || css[i] === "'") { i = readCssString(css, i).end; continue; }
 			if (css.startsWith('/*', i)) { i = skipCssSpace(css, i, true); continue; }
+			if (css[i] === '(') { depth++; i++; continue; }
+			if (css[i] === ')') { depth--; i++; continue; }
 			i = isValidCssEscape(css, i) ? cssEscapeEnd(css, i) : i + 1;
 		}
-		return { end: Math.min(i + 1, css.length), value: null };
+		return { end: i, value: null };
 	} else {
 		i = skipCssSpace(css, start);
 		const valueStart = i;
