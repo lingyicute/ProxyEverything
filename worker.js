@@ -2904,7 +2904,7 @@ ${md3Overlays()}
         }
       }catch(_){}
     }
-    if(/^(?:\\/+)?(?:https?|wss?)(?:%3A|:)(?:%2F|\\/){2}/i.test(v)){
+    if(/^(?:\\/+(?:https?|wss?)(?:%3A|:)(?:%2F|\\/){2}|(?:https?|wss?)(?:%3A(?:%2F|\\/){2}|:(?:%2F(?:%2F|\\/)|\\/%2F)))/i.test(v)){
       var qIdx=v.search(/[?#]/);
       var pPart=qIdx>=0?v.slice(0,qIdx):v;
       var sPart=qIdx>=0?v.slice(qIdx):'';
