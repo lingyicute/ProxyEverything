@@ -1274,6 +1274,7 @@ if(CK){
 }
 }catch(e){}
 /* ---- 链接点击与表单提交兜底（覆盖 innerHTML 动态插入节点与编程式 submit） ---- */
+var XLINK_NS='http://www.w3.org/1999/xlink';
 function rwLinkEv(ev){
   try{
     var t=ev.target;
@@ -1282,8 +1283,14 @@ function rwLinkEv(ev){
     if(!el)return;
     var h=el.getAttribute('href');
     if(h!==null){var p=rp(h.trim()||base());if(p&&p!==h)el.setAttribute('href',p);}
-    var xh=el.getAttribute('xlink:href');
-    if(xh!==null){var px=rp(xh.trim()||base());if(px&&px!==xh)el.setAttribute('xlink:href',px);}
+    if(el.hasAttributeNS&&el.hasAttributeNS(XLINK_NS,'href')){
+      var xhNs=el.getAttributeNS(XLINK_NS,'href');
+      var pxNs=rp(xhNs.trim()||base());
+      if(pxNs&&pxNs!==xhNs)el.setAttributeNS(XLINK_NS,'xlink:href',pxNs);
+    }else{
+      var xh=el.getAttribute('xlink:href');
+      if(xh!==null){var px=rp(xh.trim()||base());if(px&&px!==xh)el.setAttribute('xlink:href',px);}
+    }
     var pg=el.getAttribute('ping');
     if(pg){var ppg=rwPing(pg);if(ppg&&ppg!==pg)el.setAttribute('ping',ppg);}
   }catch(e){}
