@@ -1868,45 +1868,33 @@ function rewriteSvg(svg, baseUrl, workerOrigin) {
 				}
 			);
 	};
+	const rewriteXmlText = (body, transform) => {
+		const rewritePart = part => transform(decodeXmlEntities(part))
+			.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/]]>/g, ']]&gt;');
+		if (!body.includes('<![CDATA[') && !body.includes('<!--')) return rewritePart(body);
+		let out = '';
+		let last = 0;
+		for (const cm of body.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->/g)) {
+			if (cm.index > last) out += rewritePart(body.slice(last, cm.index));
+			out += cm[1] !== undefined ? `<![CDATA[${transform(cm[1])}]]>` : cm[0];
+			last = cm.index + cm[0].length;
+		}
+		if (last < body.length) out += rewritePart(body.slice(last));
+		return out;
+	};
 	return String(svg).replace(
-		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|(<style\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)([\s\S]*?)(<\/style\s*>)|(<script\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)([\s\S]*?)(<\/script\s*>)|<[?a-zA-Z](?:[^>"']|"[^"]*"|'[^']*')*>/gi,
+		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|(<style\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)((?:<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]|<(?!\/style\s*>))*)(<\/style\s*>)|(<script\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)((?:<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]|<(?!\/script\s*>))*)(<\/script\s*>)|<[?a-zA-Z](?:[^>"']|"[^"]*"|'[^']*')*>/gi,
 		(m, styleOpen, css, styleClose, scriptOpen, scriptBody, scriptClose) => {
 			if (styleOpen) {
 				const open = rewriteTagAttrs(styleOpen);
-				const rewriteXmlCss = part => rewriteCss(decodeXmlEntities(part), baseUrl, workerOrigin)
-					.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-				if (css.includes('<![CDATA[')) {
-					let out = '';
-					let last = 0;
-					for (const cm of css.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>/g)) {
-						if (cm.index > last) out += rewriteXmlCss(css.slice(last, cm.index));
-						out += `<![CDATA[${rewriteCss(cm[1], baseUrl, workerOrigin)}]]>`;
-						last = cm.index + cm[0].length;
-					}
-					if (last < css.length) out += rewriteXmlCss(css.slice(last));
-					return open + out + styleClose;
-				}
-				return open + rewriteXmlCss(css) + styleClose;
+				return open + rewriteXmlText(css, part => rewriteCss(part, baseUrl, workerOrigin)) + styleClose;
 			}
 			if (scriptOpen) {
 				const open = rewriteTagAttrs(scriptOpen);
 				const isInlineModule = !/\s(?:src|href|xlink:href)\s*=/i.test(scriptOpen) &&
 					/\stype\s*=\s*(?:"\s*module\s*"|'\s*module\s*'|module(?=[\s/>]))/i.test(scriptOpen);
 				if (!isInlineModule) return open + scriptBody + scriptClose;
-				const rewriteXmlJs = part => rewriteJsModuleSpecifiers(decodeXmlEntities(part), baseUrl, workerOrigin)
-					.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-				if (scriptBody.includes('<![CDATA[')) {
-					let out = '';
-					let last = 0;
-					for (const cm of scriptBody.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>/g)) {
-						if (cm.index > last) out += rewriteXmlJs(scriptBody.slice(last, cm.index));
-						out += `<![CDATA[${rewriteJsModuleSpecifiers(cm[1], baseUrl, workerOrigin)}]]>`;
-						last = cm.index + cm[0].length;
-					}
-					if (last < scriptBody.length) out += rewriteXmlJs(scriptBody.slice(last));
-					return open + out + scriptClose;
-				}
-				return open + rewriteXmlJs(scriptBody) + scriptClose;
+				return open + rewriteXmlText(scriptBody, part => rewriteJsModuleSpecifiers(part, baseUrl, workerOrigin)) + scriptClose;
 			}
 			if (m.startsWith('<!--') || m.startsWith('<![CDATA[')) return m;
 			if (/^<\?xml(?![\w:-])/i.test(m)) {
