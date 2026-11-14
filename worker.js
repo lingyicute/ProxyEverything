@@ -2050,13 +2050,13 @@ const STRIP_FORWARDED_HEADERS = new Set([
 ]);
 
 /** 从 Referer 还原发起请求的目标页面 URL（ws/wss 归一为 http/https）；缺失或不是合法代理地址时返回 null */
-function refererTarget(request, workerOrigin) {
+function refererTarget(request, workerOrigin, env) {
 	const referer = request.headers.get('referer');
 	if (!referer) return null;
 	try {
 		const rUrl = new URL(referer);
 		const rTarget = isWorkerHost(rUrl, workerOrigin) ? parseTarget(rUrl) : null;
-		if (rTarget && !isWorkerHost(rTarget, workerOrigin) && !targetPolicyError(rTarget)) {
+		if (rTarget && !isWorkerHost(rTarget, workerOrigin) && !targetPolicyError(rTarget, env)) {
 			if (rTarget.protocol === 'ws:') rTarget.protocol = 'http:';
 			else if (rTarget.protocol === 'wss:') rTarget.protocol = 'https:';
 			return rTarget;
@@ -2066,8 +2066,8 @@ function refererTarget(request, workerOrigin) {
 }
 
 /** 只转发可还原的代理页面 Referer；缺失或不可验证时不伪造来源。 */
-function resolveUpstreamReferer(request, workerOrigin, destinationUrl) {
-	const rTarget = refererTarget(request, workerOrigin);
+function resolveUpstreamReferer(request, workerOrigin, destinationUrl, env) {
+	const rTarget = refererTarget(request, workerOrigin, env);
 	if (!rTarget) return null;
 	// 浏览器默认 strict-origin-when-cross-origin：跨源请求只带来源，不向第三方泄露来源页的路径与查询串。
 	return rTarget.origin === new URL(destinationUrl).origin ? rTarget.href : rTarget.origin + '/';
@@ -2077,7 +2077,7 @@ function resolveUpstreamReferer(request, workerOrigin, destinationUrl) {
 // WebSocket 代理
 // ============================================================
 
-async function handleWebSocket(request, targetUrl, ck, workerOrigin) {
+async function handleWebSocket(request, targetUrl, ck, workerOrigin, env) {
 	// ws/wss → http/https 供 fetch 建立上游连接
 	const upstreamUrl = new URL(targetUrl.href);
 	if (upstreamUrl.protocol === 'ws:') upstreamUrl.protocol = 'http:';
@@ -2094,7 +2094,7 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin) {
 	headers.delete('host');
 	if (ck) applyRequestCookieScope(headers, request, ck.ns);
 	headers.set('Origin', upstreamUrl.origin);
-	const referer = resolveUpstreamReferer(request, workerOrigin, upstreamUrl.href);
+	const referer = resolveUpstreamReferer(request, workerOrigin, upstreamUrl.href, env);
 	if (referer) headers.set('Referer', referer);
 	else headers.delete('Referer');
 	headers.set('Connection', 'Upgrade');
@@ -2207,7 +2207,7 @@ Disallow: /wss%3A
 		// ---- 漏网的站内相对请求：innerHTML、location.href = '/x'、Worker 内请求、默认 /favicon.ico 等未经改写的地址
 		//      会直接落到代理域。路径不带协议而 Referer 是代理页面时，按来源页的目标站点还原并重定向 ----
 		if (!/^(?:https?|wss?):\/\//i.test(safeDecode(url.pathname.substring(1)).trim().replace(/^\/+/, ''))) {
-			const refTarget = refererTarget(request, workerOrigin);
+			const refTarget = refererTarget(request, workerOrigin, env);
 			if (refTarget) {
 				const leaked = new URL(url.pathname.replace(/^\/+/, '/') + url.search, refTarget);
 				return new Response(null, {
@@ -2243,7 +2243,7 @@ Disallow: /wss%3A
 		// WebSocket 请求走独立通道
 		if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
 			try {
-				return await handleWebSocket(request, targetUrl, ck, workerOrigin);
+				return await handleWebSocket(request, targetUrl, ck, workerOrigin, env);
 			} catch (e) {
 				return new Response('WebSocket 代理失败: ' + e.message, { status: 502 });
 			}
@@ -2264,7 +2264,7 @@ Disallow: /wss%3A
 		stripHopByHop(fwdHeaders);
 		// 不凭空制造来源头：导航/图片等无 Origin 的请求应保持无 Origin；
 		// 请求有 Origin 但没有可验证的代理页面 Referer 时，不能冒充目标站点绕过 CSRF 校验。
-		const referer = resolveUpstreamReferer(request, workerOrigin, fetchUrl);
+		const referer = resolveUpstreamReferer(request, workerOrigin, fetchUrl, env);
 		if (referer) fwdHeaders.set('Referer', referer);
 		else fwdHeaders.delete('Referer');
 		if (request.headers.has('origin')) {
