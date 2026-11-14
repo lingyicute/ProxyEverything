@@ -2022,12 +2022,12 @@ function refererTarget(request, workerOrigin) {
 	return null;
 }
 
-/** 重写转发请求中的 Referer 头，避免将代理域名泄露给源站 */
-function resolveUpstreamReferer(request, workerOrigin, fallbackUrl) {
+/** 只转发可还原的代理页面 Referer；缺失或不可验证时不伪造来源。 */
+function resolveUpstreamReferer(request, workerOrigin, destinationUrl) {
 	const rTarget = refererTarget(request, workerOrigin);
-	if (!rTarget) return fallbackUrl;
+	if (!rTarget) return null;
 	// 浏览器默认 strict-origin-when-cross-origin：跨源请求只带来源，不向第三方泄露来源页的路径与查询串。
-	return rTarget.origin === new URL(fallbackUrl).origin ? rTarget.href : rTarget.origin + '/';
+	return rTarget.origin === new URL(destinationUrl).origin ? rTarget.href : rTarget.origin + '/';
 }
 
 // ============================================================
@@ -2051,9 +2051,9 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin) {
 	headers.delete('host');
 	if (ck) applyRequestCookieScope(headers, request, ck.ns);
 	headers.set('Origin', upstreamUrl.origin);
-	if (headers.has('referer')) {
-		headers.set('Referer', resolveUpstreamReferer(request, workerOrigin, upstreamUrl.href));
-	}
+	const referer = resolveUpstreamReferer(request, workerOrigin, upstreamUrl.href);
+	if (referer) headers.set('Referer', referer);
+	else headers.delete('Referer');
 	headers.set('Connection', 'Upgrade');
 	headers.set('Upgrade', 'websocket');
 
@@ -2219,14 +2219,14 @@ Disallow: /wss%3A
 			fwdHeaders.set(k, v);
 		}
 		stripHopByHop(fwdHeaders);
-		// 伪装成直连访问：重写 Origin / Referer
+		// 不凭空制造来源头：导航/图片等无 Origin 的请求应保持无 Origin；
+		// 请求有 Origin 但没有可验证的代理页面 Referer 时，不能冒充目标站点绕过 CSRF 校验。
 		const referer = resolveUpstreamReferer(request, workerOrigin, fetchUrl);
-		// 浏览器本应携带 Origin 的请求（非 GET/HEAD 或 CORS 模式）按来源页的源回源；
-		// 一律填目标源会把跨站请求伪装成同源，绕过源站基于 Origin 的 CSRF / CORS 校验。
-		const sendsOrigin = request.headers.has('origin') ||
-			(request.headers.get('sec-fetch-mode') || '').toLowerCase() === 'cors';
-		fwdHeaders.set('Origin', sendsOrigin ? new URL(referer).origin : targetUrl.origin);
-		fwdHeaders.set('Referer', referer);
+		if (referer) fwdHeaders.set('Referer', referer);
+		else fwdHeaders.delete('Referer');
+		if (request.headers.has('origin')) {
+			fwdHeaders.set('Origin', referer ? new URL(referer).origin : 'null');
+		} else fwdHeaders.delete('Origin');
 		fwdHeaders.delete('host');
 		// Cookie 按站点隔离：只回传属于当前目标站点的那部分，并剥掉命名空间前缀
 		applyRequestCookieScope(fwdHeaders, request, ck.ns);
