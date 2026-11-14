@@ -788,6 +788,8 @@ function getShimScript(workerOrigin, cookieNs) {
 	return `<script>//<![CDATA[
 (function(){
 try{
+/* XHR/pjax 拉回的 HTML 片段同样注入了 shim，被 jQuery/Turbo 等再次执行时不能层层重复包裹原生 API */
+if(window.__PE__)return;
 var WO=${JSON.stringify(workerOrigin)};
 var WOU=new URL(WO);
 var WOH=WOU.hostname.toLowerCase().replace(/\\.+$/,'');

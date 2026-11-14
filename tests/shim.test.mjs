@@ -98,3 +98,21 @@ test('shim: inherited Object.prototype names are not treated as URL attributes',
 		assert.equal(div.getAttribute('p:' + name), 'value', 'p:' + name);
 	}
 });
+
+test('shim: re-executing an injected copy keeps the hooks installed once', () => {
+	const { ctx, errors, run } = createBrowser();
+	const hooks = () => [
+		ctx.XMLHttpRequest.prototype.open,
+		ctx.Element.prototype.setAttribute,
+		ctx.Element.prototype.setAttributeNS,
+		ctx.Element.prototype.removeAttribute,
+	];
+	const first = hooks();
+	run();
+	run();
+	assert.deepEqual(errors, []);
+	assert.deepEqual(hooks(), first);
+	const img = new ctx.Element('img');
+	img.setAttribute('src', 'a.png');
+	assert.equal(img.getAttribute('src'), proxy('/dir/a.png'));
+});
