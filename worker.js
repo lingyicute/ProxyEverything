@@ -37,7 +37,7 @@ const STRIP_RESPONSE_HEADERS = [
 	'permissions-policy',
 	'timing-allow-origin',
 	'content-location',
-	'refresh',
+	'refresh',            // 由 stripResponseHeaders 改写目标后重新写入
 	'expect-ct',
 	'server',
 	'strict-transport-security',
@@ -87,6 +87,16 @@ function stripHopByHop(headers) {
 		}
 	}
 	for (const name of HOP_BY_HOP) headers.delete(name);
+}
+
+/**
+ * 剥除破坏代理的响应头。Refresh 与 meta refresh 同语义，只丢弃会让依赖它跳转的页面停在原地，
+ * 原样保留又会跳出代理，因此按目标地址改写后写回。
+ */
+function stripResponseHeaders(headers, request, baseUrl) {
+	const refresh = request && baseUrl ? headers.get('refresh') : null;
+	for (const h of STRIP_RESPONSE_HEADERS) headers.delete(h);
+	if (refresh) headers.set('Refresh', rewriteRefreshContent(refresh, baseUrl, new URL(request.url).origin));
 }
 
 function stripTransformedHeaders(headers) {
@@ -744,9 +754,9 @@ function applyCors(headers, request) {
 }
 
 /** 构造透传 Response（headers 可变），并做统一清洗 */
-function buildResponse(upstream, request, ck) {
+function buildResponse(upstream, request, ck, baseUrl) {
 	const resp = new Response(upstream.body, upstream);
-	for (const h of STRIP_RESPONSE_HEADERS) resp.headers.delete(h);
+	stripResponseHeaders(resp.headers, request, baseUrl);
 	stripHopByHop(resp.headers);
 	if (ENABLE_PROXY_NOINDEX) {
 		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
@@ -1635,7 +1645,7 @@ async function transformText(response, baseUrl, workerOrigin, kind, request, dec
 	}
 
 	const resp = new Response(bodyOut, response);
-	for (const h of STRIP_RESPONSE_HEADERS) resp.headers.delete(h);
+	stripResponseHeaders(resp.headers, request, baseUrl);
 	if (passthrough === null) {
 		stripTransformedHeaders(resp.headers);
 		const ct = (response.headers.get('content-type') || '').split(';')[0].trim();
@@ -2259,7 +2269,7 @@ Disallow: /wss%3A
 
 		// ---- 重定向 ----
 		if (REDIRECT_STATUS.has(upstream.status)) {
-			const resp = buildResponse(upstream, request, ck);
+			const resp = buildResponse(upstream, request, ck, fetchUrl);
 			const loc = upstream.headers.get('location');
 			if (loc) {
 				try {
@@ -2287,14 +2297,14 @@ Disallow: /wss%3A
 
 		// ---- 204 / 205 / 304 无正文 ----
 		if ([204, 205, 304].includes(upstream.status) || request.method === 'HEAD') {
-			const resp = buildResponse(upstream, request, ck);
+			const resp = buildResponse(upstream, request, ck, fetchUrl);
 			if (resp.body) resp.body.cancel().catch(() => {});
 			// HEAD/304 可以合法携带所选表示的长度与验证器，不按正文变换清洗。
 			return new Response(null, resp);
 		}
 
 		// 局部正文不能安全重写：保留原始字节、Content-Range 与验证器。
-		if (upstream.status === 206) return buildResponse(upstream, request, ck);
+		if (upstream.status === 206) return buildResponse(upstream, request, ck, fetchUrl);
 
 		try {
 		// ---- 按内容类型处理 ----
@@ -2309,7 +2319,7 @@ Disallow: /wss%3A
 			mime.includes('ecmascript') || isManifest ||
 			mime.includes('image/svg+xml');
 		// 透传分支不应建立转码管线，否则 upstream.body 会被锁定却仍被复用。
-		if (!isTextual) return buildResponse(upstream, request, ck);
+		if (!isTextual) return buildResponse(upstream, request, ck, fetchUrl);
 
 		let bodySource = upstream.body;
 		let charset = getCharset(contentType);
@@ -2338,7 +2348,7 @@ Disallow: /wss%3A
 		 */
 		const makeInterim = (ctOverride) => {
 			const interim = new Response(bodySource, upstream);
-			for (const h of STRIP_RESPONSE_HEADERS) interim.headers.delete(h);
+			stripResponseHeaders(interim.headers, request, baseUrl);
 			stripHopByHop(interim.headers);
 			stripTransformedHeaders(interim.headers);
 			if (ctOverride) interim.headers.set('content-type', ctOverride);
@@ -2385,7 +2395,7 @@ Disallow: /wss%3A
 		// 其它（JSON API/图片/字体/媒体/下载等）：流式透传
 		// 说明：JSON 内容不重写 —— 动态场景已由浏览器端 shim（fetch/XHR/属性 setter）覆盖，
 		// 直接改写 API 数据反而可能破坏业务逻辑。
-		return buildResponse(upstream, request, ck);
+		return buildResponse(upstream, request, ck, fetchUrl);
 		} catch (error) {
 			return errorPage(targetUrl.href, error);
 		}
