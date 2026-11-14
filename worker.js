@@ -1722,6 +1722,7 @@ return parse;
  */
 function rewriteJsModuleSpecifiers(js, baseUrl, workerOrigin) {
 	const source = String(js);
+	if (!source.includes('import') && !source.includes('export')) return source;
 	let imports;
 	try { [imports] = parseModuleImports(source); } catch { return source; }
 	const parts = [];
@@ -1738,6 +1739,7 @@ function rewriteJsModuleSpecifiers(js, baseUrl, workerOrigin) {
 		parts.push(source.slice(cursor, start), stringifyInlineJson(rewritten));
 		cursor = end;
 	}
+	if (!parts.length) return source;
 	parts.push(source.slice(cursor));
 	return parts.join('');
 }
