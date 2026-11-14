@@ -1315,6 +1315,7 @@ const HANDLERS = {
 	lineargradient: { href: 'url', 'xlink:href': 'url' },
 	radialgradient: { href: 'url', 'xlink:href': 'url' },
 };
+const HANDLER_ENTRIES = Object.entries(HANDLERS).map(([tag, attrs]) => [tag, Object.entries(attrs)]);
 
 /** raw-text 元素需要跨分片改写，但不能让单个 style/module 耗尽 Worker 内存。 */
 function bufferedTextHandler(rewrite, matches = () => true) {
@@ -1436,7 +1437,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 	));
 
 	// 具体标签的 URL 属性
-	for (const [tag, attrs] of Object.entries(HANDLERS)) {
+	for (const [tag, attrs] of HANDLER_ENTRIES) {
 		rewriter.on(tag, {
 			element(el) {
 				// 内容被我们改写过的资源必须去掉 SRI，否则哈希校验失败被浏览器拦截
@@ -1446,22 +1447,25 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 				if (tag === 'form' && !isDialogForm && hasBaseHref && !el.hasAttribute('action')) {
 					el.setAttribute('action', rw(baseHref));
 				}
-				for (const [attr, kind] of Object.entries(attrs)) {
+				for (const [attr, kind] of attrs) {
 					const v = el.getAttribute(attr);
 					if (v == null) continue;
-					const isDialogSub = attr === 'formaction' &&
-						(el.getAttribute('formmethod') || '').trim().toLowerCase() === 'dialog';
+					let next;
 					if (kind === 'srcset') {
-						el.setAttribute(attr, rewriteSrcset(v, baseHref, workerOrigin));
+						next = rewriteSrcset(v, baseHref, workerOrigin);
 					} else if (kind === 'ping') {
 						const trimmed = v.trim();
-						if (trimmed) el.setAttribute(attr, trimmed.split(/\s+/).map(rw).join(' '));
-					} else if (!v.trim() && ((tag === 'form' && !isDialogForm) || (attr === 'formaction' && !isDialogSub) ||
+						if (!trimmed) continue;
+						next = trimmed.split(/\s+/).map(rw).join(' ');
+					} else if (!v.trim() && ((tag === 'form' && !isDialogForm) ||
+						(attr === 'formaction' && (el.getAttribute('formmethod') || '').trim().toLowerCase() !== 'dialog') ||
 						(hasBaseHref && (attr === 'href' || attr === 'xlink:href' || attr === 'action')))) {
-						el.setAttribute(attr, rw(baseHref));
+						next = rw(baseHref);
 					} else {
-						el.setAttribute(attr, rw(v));
+						next = rw(v);
 					}
+					// 页内锚点、javascript:/mailto:/data: 等不变的值无需跨运行时回写（与通配处理器一致）。
+					if (next !== v) el.setAttribute(attr, next);
 				}
 				// script 标签上的内联 srcset 不存在；但懒加载属性可能出现在任意标签上（下面统一处理）
 			},

@@ -12,4 +12,5 @@
 超出 2 MiB 上限时原始字节、编码与验证器的透传，以及恰好达到上限时的正常重写。
 运行时 shim 测试在最小 DOM 桩上验证 `data`/`action`/`formaction` 仅在会加载资源的元素上改写，
 以及 shim 被重复执行时不会重复包裹原生 API。
+HTML 处理器测试以桩替代 HTMLRewriter，验证 URL 属性仅在改写结果变化时才回写。
 这些单元测试不替代 Cloudflare Workers 真实运行时的集成验证。
