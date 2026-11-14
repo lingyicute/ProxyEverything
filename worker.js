@@ -911,13 +911,18 @@ function rpBase(a){
 }
 function rwInit(init){
   if(!init||typeof init!=='object')return init;
+  var out=null;
   var ref=init.referrer;
   var refStr=ref instanceof URL?ref.href:typeof ref==='string'?ref:'';
   if(refStr&&refStr!=='about:client'){
     var nr=rp(refStr);
-    if(nr&&nr!==ref)return Object.assign({},init,{referrer:nr});
+    if(nr&&nr!==ref)out=Object.assign({},init,{referrer:nr});
   }
-  return init;
+  if(init.integrity){
+    out=out||Object.assign({},init);
+    out.integrity='';
+  }
+  return out||init;
 }
 window.__PE__={get target(){return currentTarget();},rp:rp};
 /* Request 必须在浏览器把相对地址解析到代理域之前改写；流式/POST Request 重建时需声明 duplex: 'half'，
@@ -936,7 +941,7 @@ function buildReq(u,r){
     mode:md,
     credentials:r.credentials,cache:r.cache,redirect:r.redirect,
     referrer:ref,referrerPolicy:r.referrerPolicy,
-    integrity:r.integrity,keepalive:b?false:r.keepalive,signal:r.signal,
+    integrity:'',keepalive:b?false:r.keepalive,signal:r.signal,
     duplex:'half'
   });
 }
@@ -953,9 +958,9 @@ function mergeReq(input,init){
 function rwReq(input,init){
   init=rwInit(init);
   var nu=rp(input.url);
-  if(!nu||nu===input.url)return mergeReq(input,init);
+  if((!nu||nu===input.url)&&!input.integrity)return mergeReq(input,init);
   var r=mergeReq(input,init);
-  return buildReq(nu,r);
+  return buildReq(nu||input.url,r);
 }
 if(oRequest){
   var ProxyRequest=function(input,init){
