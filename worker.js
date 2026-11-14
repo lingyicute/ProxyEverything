@@ -48,6 +48,11 @@ const STRIP_RESPONSE_HEADERS = [
 	'authentication-info',
 	'referrer-policy',    // 防止上游策略剥除同源代理路径导致回源 Referer 丢失目标地址
 	'reporting-endpoints',
+	// 以下作用于整个代理源并被浏览器持久化，会串到其它目标站点
+	'accept-ch',          // Client Hints 偏好按源保存，其它目标也会收到高熵 UA 提示
+	'critical-ch',        // 配合 Accept-CH 触发导航重试
+	'origin-agent-cluster', // 首个目标的选择会锁定整个代理源的 agent cluster 键
+	'set-login',          // FedCM 登录状态记在代理源上
 ];
 
 // 仅正文变换时移除；透传响应必须保留其表示元数据。

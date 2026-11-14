@@ -35,3 +35,16 @@ test('Refresh response header is rewritten through the proxy instead of dropped'
 		assert.equal(response.headers.get('refresh'), expected, contentType);
 	}
 });
+
+test('origin-wide persistent policy headers do not leak onto the shared proxy origin', async () => {
+	const headers = {
+		'content-type': 'image/png',
+		'accept-ch': 'Sec-CH-UA-Full-Version-List, Sec-CH-UA-Model',
+		'critical-ch': 'Sec-CH-UA-Model',
+		'origin-agent-cluster': '?1',
+		'set-login': 'logged-in',
+	};
+	const response = await fetchThrough('https://example.com/a.png', headers);
+	for (const name of Object.keys(headers).slice(1)) assert.equal(response.headers.get(name), null, name);
+	assert.equal(response.headers.get('content-type'), 'image/png');
+});

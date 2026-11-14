@@ -13,5 +13,6 @@
 运行时 shim 测试在最小 DOM 桩上验证 `data`/`action`/`formaction` 仅在会加载资源的元素上改写，
 以及 shim 被重复执行时不会重复包裹原生 API。
 HTML 处理器测试以桩替代 HTMLRewriter，验证 URL 属性仅在改写结果变化时才回写。
-响应头测试验证 `Refresh` 头经代理改写而非被丢弃。
+响应头测试验证 `Refresh` 头经代理改写而非被丢弃，以及 `Accept-CH` 等按源持久化的头
+不会落到共享的代理源上。
 这些单元测试不替代 Cloudflare Workers 真实运行时的集成验证。
