@@ -187,9 +187,18 @@ function rewriteUrl(value, baseUrl, workerOrigin) {
 	if (!v) return v;
 	// 页内锚点（#foo、url(#gradient)）保持原样
 	if (v.startsWith('#')) return v;
-	// 已经是本站代理 URL
-	if (isProxiedPath(v)) return v;
-	if (v.startsWith(workerOrigin + '/') && isProxiedPath(v.slice(workerOrigin.length))) return v;
+	// 已经是本站代理 URL：经 URL 规范化以编码裸 <、> 等字符，避免透传进内联 raw-text
+	if (isProxiedPath(v)) {
+		try {
+			const u = new URL(v, workerOrigin);
+			return u.pathname + u.search + u.hash;
+		} catch {
+			return v;
+		}
+	}
+	if (v.startsWith(workerOrigin + '/') && isProxiedPath(v.slice(workerOrigin.length))) {
+		try { return new URL(v).href; } catch { return v; }
+	}
 	try {
 		const abs = new URL(v, baseUrl);
 		if (abs.protocol !== 'http:' && abs.protocol !== 'https:' &&
