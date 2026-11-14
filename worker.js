@@ -394,6 +394,7 @@ function readCssUrl(css, start) {
  */
 function rewriteCss(css, baseUrl, workerOrigin) {
 	const source = String(css);
+	if (!source.includes('(') && !source.includes('@')) return source;
 	const parts = [];
 	let cursor = 0;
 	let i = 0;
@@ -489,13 +490,16 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 			i++;
 		}
 	}
+	if (!cursor) return source;
 	parts.push(source.slice(cursor));
 	return parts.join('');
 }
 
 /** 重写内联 style / CSS 字符串中的 url() */
 function rewriteStyleAttr(style, baseUrl, workerOrigin) {
-	return rewriteCss(style, baseUrl, workerOrigin);
+	const source = String(style);
+	if (!source.includes('(') || !/(?:url|image-set|\\)/i.test(source)) return source;
+	return rewriteCss(source, baseUrl, workerOrigin);
 }
 
 /**
