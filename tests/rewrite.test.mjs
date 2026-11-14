@@ -96,14 +96,32 @@ test('upstream Referer: full URL same-origin, origin only cross-origin', async (
 	assert.equal(forwarded.headers.get('referer'), 'https://example.com/');
 });
 
-test('upstream Origin: referring origin for CORS and non-GET requests only', async () => {
+test('upstream Origin: rewrite only browser-supplied Origin from a valid proxy Referer', async () => {
 	const target = proxy('https://api.example.net/data');
-	await send(target, { headers: { referer, 'sec-fetch-mode': 'cors' } });
+	await send(target, { headers: { referer, origin, 'sec-fetch-mode': 'cors' } });
 	assert.equal(forwarded.headers.get('origin'), 'https://example.com');
 	await send(target, { method: 'POST', headers: { referer, origin } });
 	assert.equal(forwarded.headers.get('origin'), 'https://example.com');
 	await send(target, { headers: { referer, 'sec-fetch-mode': 'no-cors' } });
-	assert.equal(forwarded.headers.get('origin'), 'https://api.example.net');
+	assert.equal(forwarded.headers.get('origin'), null);
+	assert.equal(forwarded.headers.get('referer'), 'https://example.com/');
+});
+
+test('upstream never invents Referer or a trusted Origin when the source is unknown', async () => {
+	const target = proxy('https://api.example.net/data');
+	await send(target);
+	assert.equal(forwarded.headers.get('origin'), null);
+	assert.equal(forwarded.headers.get('referer'), null);
+	await send(target, { method: 'POST', headers: { origin } });
+	assert.equal(forwarded.headers.get('origin'), 'null');
+	assert.equal(forwarded.headers.get('referer'), null);
+	await send(target, { method: 'POST', headers: { origin, referer: 'https://untrusted.example/path' } });
+	assert.equal(forwarded.headers.get('origin'), 'null');
+	assert.equal(forwarded.headers.get('referer'), null);
+	await send(target, { headers: { referer, 'sec-fetch-mode': 'cors' } });
+	assert.equal(forwarded.headers.get('origin'), null);
+	await send(target, { method: 'POST', headers: { referer } });
+	assert.equal(forwarded.headers.get('origin'), null);
 });
 
 test('cache policy: only cookies forwarded to the target disable caching', async () => {
