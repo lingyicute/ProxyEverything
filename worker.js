@@ -1523,8 +1523,8 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 // ============================================================
 
 /**
- * 限制整体缓冲的解码后输入量；不信任 Content-Length（可缺失/虚报）。
- * 超过 2 MiB 上限时不再抛错返回 502 HTML，而是把已读分片与剩余流无缝拼接后流式透传。
+ * 限制整体缓冲的原始输入字节量；不信任 Content-Length（可缺失/虚报）。
+ * 超过 2 MiB 上限时把已读分片与剩余流无缝拼接，原样透传正文及其表示元数据。
  */
 function sniffTextChunkCharset(chunks, kind, declaredCharset = null) {
 	const head = new Uint8Array(256);
@@ -1565,7 +1565,7 @@ async function readTransformText(body, kind = '', declaredCharset = null) {
 			bytes += value.byteLength;
 			if (bytes > MAX_TRANSFORM_BYTES) {
 				handedOff = true;
-				const effectiveCharset = sniffTextChunkCharset([...chunks, value], kind, declaredCharset);
+				// 未变换的表示无需嗅探/转码；原始字节和编码声明必须保持一致。
 				const passthrough = new ReadableStream({
 					start(controller) {
 						for (const c of chunks) controller.enqueue(c);
@@ -1586,7 +1586,7 @@ async function readTransformText(body, kind = '', declaredCharset = null) {
 						try { reader.releaseLock(); } catch {}
 					},
 				});
-				return { text: null, passthrough, charset: effectiveCharset };
+				return { text: null, passthrough, charset: null };
 			}
 			chunks.push(value);
 		}
@@ -1608,7 +1608,7 @@ async function readTransformText(body, kind = '', declaredCharset = null) {
 
 async function transformText(response, baseUrl, workerOrigin, kind, request, declaredCharset = null) {
 	const charset = declaredCharset || getCharset(response.headers.get('content-type'));
-	const { text: rawText, passthrough, charset: effectiveCharset } = await readTransformText(response.body, kind, charset);
+	const { text: rawText, passthrough } = await readTransformText(response.body, kind, charset);
 	let bodyOut = passthrough;
 	if (bodyOut === null) {
 		let text = rawText;
@@ -1624,17 +1624,15 @@ async function transformText(response, baseUrl, workerOrigin, kind, request, dec
 			}
 		} catch { /* 重写失败则回退原文 */ }
 		bodyOut = text;
-	} else if (effectiveCharset && !isUtf8Charset(effectiveCharset)) {
-		try {
-			bodyOut = bodyOut.pipeThrough(new TextDecoderStream(effectiveCharset)).pipeThrough(new TextEncoderStream());
-		} catch {}
 	}
 
 	const resp = new Response(bodyOut, response);
 	for (const h of STRIP_RESPONSE_HEADERS) resp.headers.delete(h);
-	stripTransformedHeaders(resp.headers);
-	const ct = (response.headers.get('content-type') || '').split(';')[0].trim();
-	resp.headers.set('content-type', (ct || 'text/plain') + '; charset=UTF-8');
+	if (passthrough === null) {
+		stripTransformedHeaders(resp.headers);
+		const ct = (response.headers.get('content-type') || '').split(';')[0].trim();
+		resp.headers.set('content-type', (ct || 'text/plain') + '; charset=UTF-8');
+	}
 	if (ENABLE_PROXY_NOINDEX) {
 		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
 	}
@@ -2348,24 +2346,26 @@ Disallow: /wss%3A
 			return result;
 		}
 
+		// 整体缓冲的资源可能超限并转为字节透传；先保留原始表示元数据，
+		// 只有确定重写了正文时 transformText 才删除验证器并声明 UTF-8。
 		// CSS
 		if (mime.includes('text/css')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'css', request, charset), upstream, request, ck);
+			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'css', request, charset), upstream, request, ck);
 		}
 
 		// JS：基于模块 lexer 的 URL 说明符重写
 		if (mime.includes('javascript') || mime.includes('ecmascript')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'js', request, charset), upstream, request, ck);
+			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'js', request, charset), upstream, request, ck);
 		}
 
 		// SVG
 		if (mime.includes('image/svg+xml')) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'svg', request, charset), upstream, request, ck);
+			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'svg', request, charset), upstream, request, ck);
 		}
 
 		// Web App Manifest（图标、start_url 等）
 		if (isManifest) {
-			return applyCommon(await transformText(makeInterim(), baseUrl, workerOrigin, 'json', request, charset), upstream, request, ck);
+			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'json', request, charset), upstream, request, ck);
 		}
 
 		// 其它（JSON API/图片/字体/媒体/下载等）：流式透传
