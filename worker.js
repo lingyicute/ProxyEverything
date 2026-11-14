@@ -290,9 +290,9 @@ function rewriteSrcset(value, baseUrl, workerOrigin) {
 	return out;
 }
 
-/** CSS 字符串不能直接沿用源引号：解析相对地址后可能从基地址继承 ' 或括号。 */
+/** CSS 字符串不能直接沿用源引号：解析相对地址后可能从基地址继承 ' 或括号，并转义 <、> 防逸出。 */
 function quoteCssString(value) {
-	return '"' + String(value).replace(/["\\\x00-\x1f\x7f]/g, ch =>
+	return '"' + String(value).replace(/["\\<>\x00-\x1f\x7f]/g, ch =>
 		ch === '"' || ch === '\\' ? '\\' + ch : '\\' + ch.charCodeAt(0).toString(16) + ' ') + '"';
 }
 
