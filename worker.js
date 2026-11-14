@@ -1882,18 +1882,27 @@ function rewriteSvg(svg, baseUrl, workerOrigin) {
 		if (last < body.length) out += rewritePart(body.slice(last));
 		return out;
 	};
+	const isInlineModuleTag = (openTag) => {
+		let hasRef = false;
+		let type = null;
+		for (const am of openTag.matchAll(/"[^"]*"|'[^']*'|(?<![\w:-])([a-z][a-z0-9_:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`/]+))/gi)) {
+			if (!am[1]) continue;
+			const name = am[1].toLowerCase();
+			if (name === 'src' || name === 'href' || name === 'xlink:href') hasRef = true;
+			else if (name === 'type' && type === null) type = decodeXmlEntities(am[2] ?? am[3] ?? am[4] ?? '').trim().toLowerCase();
+		}
+		return !hasRef && type === 'module';
+	};
 	return String(svg).replace(
-		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|(<style\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)((?:<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]|<(?!\/style\s*>))*)(<\/style\s*>)|(<script\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)((?:<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]|<(?!\/script\s*>))*)(<\/script\s*>)|<[?a-zA-Z](?:[^>"']|"[^"]*"|'[^']*')*>/gi,
-		(m, styleOpen, css, styleClose, scriptOpen, scriptBody, scriptClose) => {
+		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|(<((?:[a-z0-9_-]+:)?style)\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)((?:<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]|<(?!\/\2\s*>))*)(<\/\2\s*>)|(<((?:[a-z0-9_-]+:)?script)\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)((?:<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]|<(?!\/\6\s*>))*)(<\/\6\s*>)|<[?a-zA-Z](?:[^>"']|"[^"]*"|'[^']*')*>/gi,
+		(m, styleOpen, _styleTag, css, styleClose, scriptOpen, _scriptTag, scriptBody, scriptClose) => {
 			if (styleOpen) {
 				const open = rewriteTagAttrs(styleOpen);
 				return open + rewriteXmlText(css, part => rewriteCss(part, baseUrl, workerOrigin)) + styleClose;
 			}
 			if (scriptOpen) {
 				const open = rewriteTagAttrs(scriptOpen);
-				const isInlineModule = !/\s(?:src|href|xlink:href)\s*=/i.test(scriptOpen) &&
-					/\stype\s*=\s*(?:"\s*module\s*"|'\s*module\s*'|module(?=[\s/>]))/i.test(scriptOpen);
-				if (!isInlineModule) return open + scriptBody + scriptClose;
+				if (!isInlineModuleTag(scriptOpen)) return open + scriptBody + scriptClose;
 				return open + rewriteXmlText(scriptBody, part => rewriteJsModuleSpecifiers(part, baseUrl, workerOrigin)) + scriptClose;
 			}
 			if (m.startsWith('<!--') || m.startsWith('<![CDATA[')) return m;
