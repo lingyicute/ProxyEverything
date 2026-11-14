@@ -1713,16 +1713,16 @@ function rewriteJsModuleSpecifiers(js, baseUrl, workerOrigin) {
 		// 静态说明符 s/e 不含引号；动态说明符 s/e 包含整个字面量。
 		const start = item.d === -1 ? item.s - 1 : item.s;
 		const end = item.d === -1 ? item.e + 1 : item.e;
-		parts.push(source.slice(cursor, start), JSON.stringify(rewritten));
+		parts.push(source.slice(cursor, start), stringifyInlineJson(rewritten));
 		cursor = end;
 	}
 	parts.push(source.slice(cursor));
 	return parts.join('');
 }
 
-/** script raw-text 不解析 HTML 实体；用 JSON 转义防止 < 改变 HTML 分词状态。 */
+/** script raw-text 不解析 HTML 实体；用 JSON 转义防止 < 或 ]]> 破坏 HTML/CDATA 边界。 */
 function stringifyInlineJson(value) {
-	return JSON.stringify(value).replace(/</g, '\\u003c');
+	return JSON.stringify(value).replace(/</g, '\\u003c').replace(/]]>/g, ']]\\u003e');
 }
 
 /** 重写 <script type="importmap">：按 HTML 规范以文档基地址解析映射并移除失效的 integrity */
