@@ -2073,6 +2073,15 @@ function resolveUpstreamReferer(request, workerOrigin, destinationUrl, env) {
 	return rTarget.origin === new URL(destinationUrl).origin ? rTarget.href : rTarget.origin + '/';
 }
 
+/** 浏览器对代理域一律上报 Sec-Fetch-Site: same-origin；按真实来源页与目标源改写，防止绕过上游 Fetch Metadata 校验。 */
+function applyUpstreamSecFetchSite(headers, request, referer, destinationUrl) {
+	if (!request.headers.has('sec-fetch-site')) return;
+	const current = (request.headers.get('sec-fetch-site') || '').trim().toLowerCase();
+	if (!current || current === 'none' || current === 'cross-site') return;
+	const sameOrigin = Boolean(referer) && new URL(referer).origin === new URL(destinationUrl).origin;
+	headers.set('Sec-Fetch-Site', sameOrigin ? 'same-origin' : 'cross-site');
+}
+
 // ============================================================
 // WebSocket 代理
 // ============================================================
@@ -2097,6 +2106,7 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin, env) {
 	const referer = resolveUpstreamReferer(request, workerOrigin, upstreamUrl.href, env);
 	if (referer) headers.set('Referer', referer);
 	else headers.delete('Referer');
+	applyUpstreamSecFetchSite(headers, request, referer, upstreamUrl.href);
 	headers.set('Connection', 'Upgrade');
 	headers.set('Upgrade', 'websocket');
 
@@ -2270,6 +2280,7 @@ Disallow: /wss%3A
 		if (request.headers.has('origin')) {
 			fwdHeaders.set('Origin', referer ? new URL(referer).origin : 'null');
 		} else fwdHeaders.delete('Origin');
+		applyUpstreamSecFetchSite(fwdHeaders, request, referer, fetchUrl);
 		fwdHeaders.delete('host');
 		// Cookie 按站点隔离：只回传属于当前目标站点的那部分，并剥掉命名空间前缀
 		applyRequestCookieScope(fwdHeaders, request, ck.ns);
