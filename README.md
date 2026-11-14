@@ -9,4 +9,5 @@
 （含其中 `url()` 内的 `;` 与 `/*`）保真、XHTML 文档中的 shim 注入（CDATA 守卫）、
 缓存策略的 Cookie 作用域及无可信来源时的 HTTP 回源头行为。还验证 CSS/JS/SVG/Manifest
 超出 2 MiB 上限时原始字节、编码与验证器的透传，以及恰好达到上限时的正常重写。
+运行时 shim 测试在最小 DOM 桩上验证 `data`/`action`/`formaction` 仅在会加载资源的元素上改写。
 这些单元测试不替代 Cloudflare Workers 真实运行时的集成验证。

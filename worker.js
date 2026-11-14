@@ -1089,6 +1089,13 @@ try{
 /* setAttribute / setAttributeNS 兜底（src/srcset/imagesrcset/action/formaction/poster/data/href/xlink:href/ping） */
 var ATTRS={src:0,srcset:1,imagesrcset:1,action:0,formaction:0,poster:0,data:0,href:0,'xlink:href':0,ping:2};
 var HREF_TAGS={A:1,LINK:1,AREA:1,SCRIPT:1,IMAGE:1,USE:1,FEIMAGE:1,MPATH:1,TEXTPATH:1,PATTERN:1,FILTER:1,LINEARGRADIENT:1,RADIALGRADIENT:1};
+/* 与服务端 HANDLERS 一致：data/action/formaction 等是常见的业务属性名，只在会据此加载资源的元素上改写 */
+var ATTR_TAGS={href:HREF_TAGS,'xlink:href':HREF_TAGS,ping:{A:1,AREA:1},data:{OBJECT:1},action:{FORM:1},formaction:{INPUT:1,BUTTON:1}};
+function rwAttrKind(name,tag){
+  if(!Object.prototype.hasOwnProperty.call(ATTRS,name))return undefined;
+  var tags=Object.prototype.hasOwnProperty.call(ATTR_TAGS,name)?ATTR_TAGS[name]:null;
+  return !tags||tags[tag]===1?ATTRS[name]:undefined;
+}
 function normTag(el){
   var raw=(el&&(el.localName||el.tagName)||'').toUpperCase();
   var idx=raw.indexOf(':');
@@ -1133,11 +1140,8 @@ if(window.Element){
           if(oRA)oRA.call(this,'href');
           return;
         }
-        if(Object.prototype.hasOwnProperty.call(ATTRS,ln)){
-          if((ln!=='href'||HREF_TAGS[tag])&&(ln!=='ping'||tag==='A'||tag==='AREA')){
-            arguments[1]=rwAttrVal(this,tag,ln,ATTRS[ln],sv);
-          }
-        }
+        var kind=rwAttrKind(ln,tag);
+        if(kind!==undefined)arguments[1]=rwAttrVal(this,tag,ln,kind,sv);
       }
     }catch(e){}
     return oSA.apply(this,arguments);
@@ -1169,10 +1173,8 @@ if(window.Element){
           if(oRA)oRA.call(this,'href');
           return;
         }
-        var kind=Object.prototype.hasOwnProperty.call(ATTRS,local)?ATTRS[local]:ATTRS[ln];
-        if(kind!==undefined&&(local!=='href'||HREF_TAGS[tag])&&(local!=='ping'||tag==='A'||tag==='AREA')){
-          arguments[2]=rwAttrVal(this,tag,local,kind,sv);
-        }
+        var kind=rwAttrKind(local,tag);
+        if(kind!==undefined)arguments[2]=rwAttrVal(this,tag,local,kind,sv);
       }
     }catch(e){}
     return oSANS.apply(this,arguments);
