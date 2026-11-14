@@ -712,8 +712,8 @@ async function sniffHtmlCharset(body, declaredCharset = null) {
 			if (total < 3) continue;
 			if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) { charset = 'utf-8'; break; }
 			if (declaredCharset) break;
-			// 剥除 HTML 注释后再扫描 meta，避免被注释掉的旧版编码声明误导。
-			const text = new TextDecoder().decode(head.subarray(0, total)).replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+			// 剥除 HTML 注释（含 HTML5 短注释 <!--> / <!--->）后再扫描 meta，避免被注释掉的编码声明误导。
+			const text = new TextDecoder().decode(head.subarray(0, total)).replace(/<!--(?:>|->|[\s\S]*?(?:-->|$))/g, '');
 			const xml = /^\s*<\?xml\b[^>]{0,200}?\bencoding\s*=\s*(["'])\s*([a-z0-9_\-:.]+)\s*\1[^>]*\?>/i.exec(text);
 			if (xml) {
 				const valid = normalizeCharsetLabel(xml[2], false);
@@ -721,7 +721,7 @@ async function sniffHtmlCharset(body, declaredCharset = null) {
 			}
 			// 不把分片边界处尚未闭合的属性值当成完整编码名；仅采纳直接 charset 属性或 http-equiv=content-type 的 content。
 			for (const [, rawAttrs] of text.matchAll(/<meta\b((?:[^>"']|"[^"]*"|'[^']*'){0,500}?)\s*\/?>/gi)) {
-				const attrs = {};
+				const attrs = Object.create(null);
 				for (const [, k, dq, sq, uq] of rawAttrs.matchAll(/([a-z0-9_-]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+)))?/gi)) {
 					const name = k.toLowerCase();
 					if (!(name in attrs)) attrs[name] = dq ?? sq ?? uq ?? '';
