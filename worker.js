@@ -515,7 +515,14 @@ function rewriteLazyValue(attr, value, baseUrl, workerOrigin) {
 
 /** 重写 <meta http-equiv="refresh" content="0; url=...">（兼容省略 url= 的规范写法，避免误匹配查询串内 url= 或空 url= 回溯） */
 function rewriteRefreshContent(content, baseUrl, workerOrigin) {
-	const stripQuotes = s => s.trim().replace(/^(['"])([\s\S]*?)\1[\s\S]*$/, '$2').replace(/^['"]|['"]$/g, '').trim();
+	const stripQuotes = (s) => {
+		const t = s.trim();
+		if (t[0] === "'" || t[0] === '"') {
+			const end = t.indexOf(t[0], 1);
+			return (end >= 0 ? t.slice(1, end) : t.slice(1)).trim();
+		}
+		return t;
+	};
 	return String(content).replace(
 		/^(\s*(?:\d+(?:\.\d*)?|\.\d+)(?:\s*[;,]\s*|\s+))(?:url\s*=\s*|(?!url\s*=))([\s\S]*)$/i,
 		(m, prefix, u) => {
