@@ -5,9 +5,9 @@ import vm from 'node:vm';
 
 // Load the standalone Worker as an ES module without changing its deployment exports.
 const source = await readFile(new URL('../worker.js', import.meta.url), 'utf8');
-const { default: worker, rewriteCss, rewriteLazyValue, rewriteSvg, cookieNamespace, getShimScript } = await import(
+const { default: worker, rewriteCss, rewriteLazyValue, rewriteSvg, cookieNamespace, getShimScript, rewriteJsonUrls } = await import(
 	'data:text/javascript;base64,' + Buffer.from(source +
-		'\nexport { rewriteCss, rewriteLazyValue, rewriteSvg, cookieNamespace, getShimScript };').toString('base64')
+		'\nexport { rewriteCss, rewriteLazyValue, rewriteSvg, cookieNamespace, getShimScript, rewriteJsonUrls };').toString('base64')
 );
 
 const base = 'https://example.com/dir/page';
@@ -142,4 +142,18 @@ test('site-relative requests that escaped rewriting are redirected via Referer',
 	assert.equal(forwarded, null);
 	response = await send(origin + '/static/app.js');
 	assert.equal(response.status, 400);
+});
+
+test('manifest: id resolves against the start_url origin, other URLs against the manifest', () => {
+	const manifestUrl = 'https://example.com/static/app/manifest.json';
+	const rewrite = m => JSON.parse(rewriteJsonUrls(JSON.stringify(m), manifestUrl, origin));
+	const out = rewrite({ id: '?pwa', start_url: '../../home?src=pwa', scope: './', icons: [{ src: 'i.png' }] });
+	assert.equal(out.id, proxy('https://example.com/?pwa'));
+	assert.equal(out.start_url, proxy('https://example.com/home?src=pwa'));
+	assert.equal(out.scope, proxy('https://example.com/static/app/'));
+	assert.equal(out.icons[0].src, proxy('https://example.com/static/app/i.png'));
+	assert.equal(rewrite({ id: 'app/main', start_url: 'https://www.example.com/' }).id,
+		proxy('https://www.example.com/app/main'));
+	assert.equal(rewrite({ id: 'app' }).id, proxy('https://example.com/app'));
+	assert.equal(rewrite({ id: '' }).id, '');
 });

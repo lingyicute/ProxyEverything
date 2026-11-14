@@ -1893,7 +1893,13 @@ function rewriteJsonUrls(text, baseUrl, workerOrigin) {
 	const images = (list) => {
 		if (Array.isArray(list)) for (const item of list) fields(item, ['src']);
 	};
-	fields(manifest, ['id', 'start_url', 'scope']);
+	// id 按规范相对 start_url 的来源解析，而非 manifest 地址：否则 "?pwa"、"app" 这类 id 会拼到 manifest 所在路径上。
+	if (typeof manifest.id === 'string' && manifest.id.trim()) {
+		let idBase = baseUrl;
+		try { idBase = new URL(typeof manifest.start_url === 'string' ? manifest.start_url : '', baseUrl).origin + '/'; } catch {}
+		manifest.id = rewriteUrl(manifest.id, idBase, workerOrigin);
+	}
+	fields(manifest, ['start_url', 'scope']);
 	images(manifest.icons);
 	images(manifest.screenshots);
 	if (Array.isArray(manifest.shortcuts)) for (const item of manifest.shortcuts) {
