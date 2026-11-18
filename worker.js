@@ -2605,7 +2605,10 @@ function targetPolicyError(targetUrl, env) {
 	try {
 		if (typeof configured !== 'string' || !configured.trim()) throw new Error();
 		const origins = configured.split(',').map(value => {
-			const u = new URL(value.trim());
+			const entry = value.trim();
+			// 先验证来源语法：URL 解析会消除点路径、反斜线、空查询串等输入错误。
+			if (!/^https?:\/\/[^\s\\/@?#*\x00-\x1f\x7f]+\/?$/i.test(entry)) throw new Error();
+			const u = new URL(entry);
 			if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password ||
 				u.pathname !== '/' || u.search || u.hash) throw new Error();
 			u.hostname = normalizeHostname(u.hostname);

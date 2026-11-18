@@ -309,7 +309,9 @@ test('upstream access requires a valid explicit origin allowlist', async () => {
 	globalThis.fetch = async url => { seen.push(url); return new Response('ok'); };
 	try {
 		const request = new Request(proxy('https://example.com/page'));
-		for (const value of [undefined, '', '*', 'https://example.com/path', 'not a URL']) {
+		for (const value of [undefined, '', '*', 'https://example.com/path', 'not a URL',
+			'https:example.com', 'https://example.com/path/..', 'https://example.com?',
+			'https://example.com/#', 'https://@example.com', 'https://example.com,https://*.example.com']) {
 			const response = await worker.fetch(request, { ALLOWED_TARGET_ORIGINS: value });
 			assert.equal(response.status, 503);
 		}
