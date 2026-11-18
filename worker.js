@@ -2071,83 +2071,83 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
  * 限制整体缓冲的原始输入字节量；不信任 Content-Length（可缺失/虚报）。
  * 超过 2 MiB 上限时把已读分片与剩余流无缝拼接，原样透传正文及其表示元数据。
  */
-function sniffTextChunkCharset(chunks, kind, declaredCharset = null) {
-	const head = new Uint8Array(256);
-	let total = 0;
-	for (const c of chunks) {
-		const sub = c.subarray(0, head.length - total);
-		head.set(sub, total);
-		total += sub.length;
-		if (total >= head.length) break;
-	}
-	if (total >= 2 && head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
-	if (total >= 2 && head[0] === 0xfe && head[1] === 0xff) return 'utf-16be';
-	if (total >= 3 && head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) return 'utf-8';
+function sniffTextCharset(bytes, kind, declaredCharset = null) {
+	const head = bytes.subarray(0, 256);
+	if (head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
+	if (head[0] === 0xfe && head[1] === 0xff) return 'utf-16be';
+	if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) return 'utf-8';
 	if (declaredCharset) return declaredCharset;
-	if (kind === 'css' && total >= 12) {
-		const ascii = new TextDecoder().decode(head.subarray(0, total));
-		const m = /^@charset\s+(?:"([^"]{1,64})"|'([^']{1,64})')\s*;/i.exec(ascii);
+	if (kind === 'css') {
+		const m = /^@charset\s+(?:"([^"]{1,64})"|'([^']{1,64})')\s*;/i.exec(new TextDecoder().decode(head));
 		if (m) return normalizeCharsetLabel(m[1] || m[2], true) || 'utf-8';
 	}
-	if (kind === 'svg' && total >= 20) {
-		const ascii = new TextDecoder().decode(head.subarray(0, total));
-		const m = /^\s*<\?xml\b[^>]{0,200}?\bencoding\s*=\s*(["'])\s*([^"'\s]{1,64})\s*\1[^>]*\?>/i.exec(ascii);
-		if (m) return normalizeCharsetLabel(m[2], false) || 'utf-8';
+	if (kind === 'svg') {
+		return utf16XmlSignature(head) || xmlDeclaredCharset(new TextDecoder().decode(head)) || 'utf-8';
 	}
 	return 'utf-8';
 }
 
+function replayBody(reader, prefix, tail) {
+	let stopped = false;
+	return new ReadableStream({
+		start(controller) {
+			if (prefix.byteLength) controller.enqueue(prefix);
+			controller.enqueue(tail);
+		},
+		async pull(controller) {
+			try {
+				const { done, value } = await reader.read();
+				if (stopped) return;
+				if (!done) controller.enqueue(value);
+				else {
+					reader.releaseLock();
+					controller.close();
+				}
+			} catch (error) {
+				if (!stopped) reader.releaseLock();
+				throw error;
+			}
+		},
+		async cancel(reason) {
+			stopped = true;
+			try { await reader.cancel(reason); } finally { reader.releaseLock(); }
+		},
+	});
+}
+
 async function readTransformText(body, kind = '', declaredCharset = null) {
-	if (!body) return { text: '', passthrough: null, charset: declaredCharset || 'utf-8' };
+	if (!body) return { text: '', passthrough: null };
 	const reader = body.getReader();
-	const chunks = [];
-	let bytes = 0;
+	let buffer = new Uint8Array(0);
+	let size = 0;
 	let handedOff = false;
 	try {
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			bytes += value.byteLength;
-			if (bytes > MAX_TRANSFORM_BYTES) {
+			if (!value.byteLength) continue;
+			const nextSize = size + value.byteLength;
+			if (nextSize > MAX_TRANSFORM_BYTES) {
+				const passthrough = replayBody(reader, buffer.subarray(0, size), value);
 				handedOff = true;
-				// 未变换的表示无需嗅探/转码；原始字节和编码声明必须保持一致。
-				const passthrough = new ReadableStream({
-					start(controller) {
-						for (const c of chunks) controller.enqueue(c);
-						chunks.length = 0;
-						controller.enqueue(value);
-					},
-					async pull(controller) {
-						const next = await reader.read();
-						if (next.done) {
-							reader.releaseLock();
-							controller.close();
-						} else {
-							controller.enqueue(next.value);
-						}
-					},
-					cancel(reason) {
-						reader.cancel(reason).catch(() => {});
-						try { reader.releaseLock(); } catch {}
-					},
-				});
-				return { text: null, passthrough, charset: null };
+				return { text: null, passthrough };
 			}
-			chunks.push(value);
+			if (nextSize > buffer.length) {
+				// 分片数不影响内存上限：小分片合入容量倍增的单个缓冲区。
+				const next = new Uint8Array(Math.min(MAX_TRANSFORM_BYTES, Math.max(4096, buffer.length * 2, nextSize)));
+				next.set(buffer.subarray(0, size));
+				buffer = next;
+			}
+			buffer.set(value, size);
+			size = nextSize;
 		}
-		const effectiveCharset = sniffTextChunkCharset(chunks, kind, declaredCharset);
-		const decoder = new TextDecoder(effectiveCharset);
-		const parts = [];
-		for (const c of chunks) parts.push(decoder.decode(c, { stream: true }));
-		parts.push(decoder.decode());
-		return { text: parts.join(''), passthrough: null, charset: effectiveCharset };
+		const bytes = buffer.subarray(0, size);
+		return { text: new TextDecoder(sniffTextCharset(bytes, kind, declaredCharset)).decode(bytes), passthrough: null };
 	} catch (error) {
 		reader.cancel(error).catch(() => {});
 		throw error;
 	} finally {
-		if (!handedOff) {
-			try { reader.releaseLock(); } catch {}
-		}
+		if (!handedOff) reader.releaseLock();
 	}
 }
 

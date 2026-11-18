@@ -3,7 +3,9 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const source = await readFile(new URL('../worker.js', import.meta.url), 'utf8');
-const { default: worker } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { default: worker, readTransformText } = await import(
+	'data:text/javascript;base64,' + Buffer.from(source + '\nexport { readTransformText };').toString('base64')
+);
 const origin = 'https://proxy.example';
 const limit = 2 * 1024 * 1024;
 
@@ -94,4 +96,30 @@ test('oversized decoded HTTP streams do not re-use the original encoded validato
 	assert.equal(response.headers.get('content-encoding'), 'gzip');
 	for (const header of ['content-length', 'etag', 'last-modified']) assert.equal(response.headers.get(header), null);
 	assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+});
+
+test('bounded text reader accepts fragmented multibyte text', async () => {
+	const input = '海😀'.repeat(700);
+	const bytes = Buffer.from(input);
+	let offset = 0;
+	const stream = new ReadableStream({
+		pull(controller) {
+			if (offset === bytes.length) controller.close();
+			else controller.enqueue(bytes.subarray(offset, ++offset));
+		},
+	});
+	assert.equal((await readTransformText(stream)).text, input);
+	assert.equal(stream.locked, false);
+});
+
+test('canceling an oversized stream releases the upstream reader', async () => {
+	let canceled;
+	const stream = new ReadableStream({
+		start(controller) { controller.enqueue(new Uint8Array(limit + 1)); },
+		cancel(reason) { canceled = reason; },
+	});
+	const { passthrough } = await readTransformText(stream);
+	await passthrough.cancel('consumer stopped');
+	assert.equal(canceled, 'consumer stopped');
+	assert.equal(stream.locked, false);
 });
