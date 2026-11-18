@@ -2865,6 +2865,16 @@ Disallow: /
 			}
 			// 丢弃重定向正文时显式取消上游流，且原正文长度/编码/摘要不再有效。
 			if (resp.body) resp.body.cancel().catch(() => {});
+			// 浏览器只看到同一个代理源，不会像真正的跨源重定向那样删除 Authorization。
+			const nextLocation = resp.headers.get('Location');
+			if (nextLocation && fwdHeaders.has('Authorization')) {
+				const next = parseTarget(new URL(nextLocation, workerOrigin));
+				if (!next || next.origin !== targetUrl.origin) {
+					return new Response('不能跨目标来源重定向带 Authorization 的请求', {
+						status: 502, headers: { 'Cache-Control': 'no-store' },
+					});
+				}
+			}
 			stripTransformedHeaders(resp.headers);
 			return new Response(null, resp);
 		}

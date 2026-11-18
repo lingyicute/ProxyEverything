@@ -149,3 +149,23 @@ test('client no-transform selects an intact, separately cacheable representation
 		assert.equal((await r.text()) === css, unchanged);
 	}
 });
+
+test('authenticated redirects stay within the original target origin', async t => {
+	const target = 'https://example.com/start';
+	const env = { ALLOWED_TARGET_ORIGINS: 'https://example.com,https://cdn.example' };
+	let location;
+	t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 307, headers: { location } }));
+	for (const [next, authenticated, status] of [
+		['/next', true, 307], ['https://cdn.example/next', false, 307],
+		['https://cdn.example/next', true, 502], [proxy('https://cdn.example/next'), true, 502],
+		['http://example.com/next', true, 502], ['https://example.com:8443/next', true, 502],
+	]) {
+		location = next;
+		const r = await worker.fetch(new Request(proxy(target), {
+			headers: authenticated ? { authorization: 'Bearer fixture' } : {},
+		}), env);
+		assert.equal(r.status, status);
+		assert.equal(r.headers.has('Location'), status === 307);
+		if (status === 502) assert.equal(r.headers.get('Cache-Control'), 'no-store');
+	}
+});
