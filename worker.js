@@ -26,7 +26,6 @@ const STRIP_RESPONSE_HEADERS = [
 	'content-security-policy',
 	'content-security-policy-report-only',
 	'x-frame-options',
-	'x-content-type-options',
 	'cross-origin-opener-policy',
 	'cross-origin-embedder-policy',
 	'cross-origin-resource-policy',
@@ -781,6 +780,27 @@ function applyCors(headers, request) {
 	return headers;
 }
 
+function mimeType(contentType) {
+	return (contentType || '').split(';', 1)[0].trim().toLowerCase();
+}
+
+function isJsonMime(mime) {
+	return mime === 'application/json' || mime === 'text/json' || mime.endsWith('+json');
+}
+
+function transformKind(headers, request) {
+	if (/^\s*attachment\s*(?:;|$)/i.test(headers.get('Content-Disposition') || '') ||
+		/(?:^|,)\s*no-transform\s*(?:,|$)/i.test(headers.get('Cache-Control') || '')) return null;
+	const mime = mimeType(headers.get('Content-Type'));
+	if (mime === 'text/html' || mime === 'application/xhtml+xml') return 'html';
+	if (mime === 'text/css') return 'css';
+	if (/^(?:(?:application|text)\/(?:x-)?(?:javascript|ecmascript)|text\/(?:javascript1\.[0-5]|jscript|livescript))$/.test(mime)) return 'js';
+	if (mime === 'image/svg+xml') return 'svg';
+	if (mime === 'application/manifest+json' || (isJsonMime(mime) &&
+		request.headers.get('Sec-Fetch-Dest')?.toLowerCase() === 'manifest')) return 'manifest';
+	return null;
+}
+
 /** 构造透传 Response（headers 可变），并做统一清洗 */
 function buildResponse(upstream, request, ck, baseUrl) {
 	const resp = new Response(upstream.body, upstream);
@@ -807,6 +827,8 @@ function applyCachePolicy(response, request, ck) {
 	// 不把匿名缓存条目用于后来带凭证的请求；不能只在带凭证的响应上设置 no-store。
 	addVary(response.headers, 'Cookie');
 	addVary(response.headers, 'Authorization');
+	const mime = mimeType(response.headers.get('Content-Type'));
+	if (mime !== 'application/manifest+json' && isJsonMime(mime)) addVary(response.headers, 'Sec-Fetch-Dest');
 	const hasCookie = Boolean(request) && (ck ? ck.hasCookie : request.headers.has('cookie'));
 	if (response.status >= 500 || response.headers.has('set-cookie') ||
 		(request && (!isCacheableMethod(request.method) || hasCookie ||
@@ -2339,95 +2361,31 @@ Disallow: /wss%3A
 		if (upstream.status === 206) return buildResponse(upstream, request, ck, fetchUrl);
 
 		try {
-		// ---- 按内容类型处理 ----
-		const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
-		const mime = contentType.split(';')[0].trim();
-		const fetchDest = (request.headers.get('sec-fetch-dest') || '').toLowerCase();
-		const baseUrl = documentBase(targetUrl);
-		const isHtml = mime.includes('text/html') || mime.includes('application/xhtml+xml');
-		const isManifest = mime.includes('manifest+json') ||
-			(mime.includes('json') && fetchDest === 'manifest');
-		const isTextual = isHtml || mime.includes('text/css') || mime.includes('javascript') ||
-			mime.includes('ecmascript') || isManifest ||
-			mime.includes('image/svg+xml');
-		// 透传分支不应建立转码管线，否则 upstream.body 会被锁定却仍被复用。
-		if (!isTextual) return buildResponse(upstream, request, ck, fetchUrl);
-
-		let bodySource = upstream.body;
-		let charset = getCharset(contentType);
-
-		// HTML 的 BOM 优先于 HTTP charset；无显式编码时再嗅探 meta/XML 声明，并流式转码为 UTF-8 供 HTMLRewriter 处理。
-		// 外部 CSS/JS/SVG/Manifest 交由 readTransformText 按 BOM > HTTP charset > 内联声明单次解码，避免二次解码乱码。
-		if (isHtml) {
-			const sniffed = await sniffHtmlCharset(upstream.body, charset);
-			charset = sniffed.charset;
-			bodySource = sniffed.body;
-			if (bodySource && charset && !isUtf8Charset(charset)) {
-				try {
-					// 构造成功后才触碰流；无效 charset 不能回退到已 tee/锁定的 upstream.body。
-					const decoder = new TextDecoderStream(charset);
-					const encoder = new TextEncoderStream();
-					bodySource = bodySource.pipeThrough(decoder).pipeThrough(encoder);
-				} catch {
-					// 保留当前未消费的 bodySource，以 UTF-8 宽松解码作为回退。
+			// 非目标媒体、附件或禁止变换的表示不会被读取或转码。
+			const kind = transformKind(upstream.headers, request);
+			if (!kind) return buildResponse(upstream, request, ck, fetchUrl);
+			const contentType = upstream.headers.get('Content-Type');
+			const baseUrl = documentBase(targetUrl);
+			const charset = getCharset(contentType);
+			if (kind === 'html') {
+				// BOM 优先于 HTTP charset，最后才读文档内声明。
+				const sniffed = await sniffHtmlCharset(upstream.body, charset);
+				let body = sniffed.body;
+				if (body && sniffed.charset && !isUtf8Charset(sniffed.charset)) {
+					try {
+						const decoder = new TextDecoderStream(sniffed.charset);
+						const encoder = new TextEncoderStream();
+						body = body.pipeThrough(decoder).pipeThrough(encoder);
+					} catch { /* 保留当前流供 UTF-8 宽松解码 */ }
 				}
+				const interim = new Response(body, upstream);
+				stripResponseHeaders(interim.headers, request, baseUrl);
+				stripHopByHop(interim.headers);
+				stripTransformedHeaders(interim.headers);
+				interim.headers.set('Content-Type', mimeType(contentType) + '; charset=UTF-8');
+				return applyCommon(transformHtml(interim, baseUrl, workerOrigin, ck), request, ck);
 			}
-		}
-
-		/**
-		 * 构造中间 Response：携带上游全部响应头（剔除会破坏代理的头），
-		 * 正文换成（可能已转码的）流，并删除仅适用于上游原字节的验证器/摘要/范围信息。
-		 */
-		const makeInterim = (ctOverride) => {
-			const interim = new Response(bodySource, upstream);
-			stripResponseHeaders(interim.headers, request, baseUrl);
-			stripHopByHop(interim.headers);
-			stripTransformedHeaders(interim.headers);
-			if (ctOverride) interim.headers.set('content-type', ctOverride);
-			return interim;
-		};
-
-		// HTML：流式重写（输入统一为 UTF-8，Content-Type 同步覆盖，
-		// 避免 HTMLRewriter 按 meta 里的旧 charset 重新编码输出）
-		if (isHtml) {
-			const interim = makeInterim((mime || 'text/html') + '; charset=UTF-8');
-			const result = transformHtml(interim, baseUrl, workerOrigin, ck);
-			// 补一遍统一头处理
-			if (ENABLE_PROXY_NOINDEX) {
-				result.headers.set('X-Robots-Tag', 'noindex, nofollow');
-			}
-			applyCors(result.headers, request);
-			applyCachePolicy(result, request, ck);
-			rescopeSetCookies(result.headers, ck.ns, ck.isHttps);
-			return result;
-		}
-
-		// 整体缓冲的资源可能超限并转为字节透传；先保留原始表示元数据，
-		// 只有确定重写了正文时 transformText 才删除验证器并声明 UTF-8。
-		// CSS
-		if (mime.includes('text/css')) {
-			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'css', request, charset), upstream, request, ck);
-		}
-
-		// JS：基于模块 lexer 的 URL 说明符重写
-		if (mime.includes('javascript') || mime.includes('ecmascript')) {
-			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'js', request, charset), upstream, request, ck);
-		}
-
-		// SVG
-		if (mime.includes('image/svg+xml')) {
-			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'svg', request, charset), upstream, request, ck);
-		}
-
-		// Web App Manifest（图标、start_url 等）
-		if (isManifest) {
-			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'json', request, charset), upstream, request, ck);
-		}
-
-		// 其它（JSON API/图片/字体/媒体/下载等）：流式透传
-		// 说明：JSON 内容不重写 —— 动态场景已由浏览器端 shim（fetch/XHR/属性 setter）覆盖，
-		// 直接改写 API 数据反而可能破坏业务逻辑。
-		return buildResponse(upstream, request, ck, fetchUrl);
+			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, kind, request, charset), request, ck);
 		} catch (error) {
 			return errorPage(targetUrl.href, error);
 		}
@@ -2435,7 +2393,7 @@ Disallow: /wss%3A
 };
 
 /** transformText 的产物再补一遍统一头处理 */
-function applyCommon(resp, upstream, request, ck) {
+function applyCommon(resp, request, ck) {
 	stripHopByHop(resp.headers);
 	if (ENABLE_PROXY_NOINDEX) {
 		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');

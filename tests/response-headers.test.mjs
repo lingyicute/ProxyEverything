@@ -14,11 +14,11 @@ const proxy = url => {
 	return origin + '/' + encodeURIComponent(u.origin) + u.pathname.split('/').map(encodeURIComponent).join('/') + u.search;
 };
 
-async function fetchThrough(target, upstreamHeaders, body = 'body') {
+async function fetchThrough(target, upstreamHeaders, body = 'body', requestHeaders = {}) {
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async () => new Response(body, { headers: upstreamHeaders });
 	try {
-		return await worker.fetch({ url: proxy(target), method: 'GET', headers: new Headers(), body: null }, {
+		return await worker.fetch({ url: proxy(target), method: 'GET', headers: new Headers(requestHeaders), body: null }, {
 			ALLOWED_TARGET_ORIGINS: new URL(target).origin,
 		});
 	} finally {
@@ -49,4 +49,30 @@ test('origin-wide persistent policy headers do not leak onto the shared proxy or
 	const response = await fetchThrough('https://example.com/a.png', headers);
 	for (const name of Object.keys(headers).slice(1)) assert.equal(response.headers.get(name), null, name);
 	assert.equal(response.headers.get('content-type'), 'image/png');
+});
+
+test('only exact supported media types are transformed; attachments and no-transform stay untouched', async () => {
+	const page = 'https://example.com/dir/page';
+	const original = 'a{background:url(untouched.png)}';
+	for (const headers of [
+		{ 'content-type': 'application/x-text/css-extra' },
+		{ 'content-type': 'text/css', 'content-disposition': 'attachment; filename="sheet.css"' },
+		{ 'content-type': 'text/css', 'cache-control': 'public, no-transform, max-age=60' },
+	]) {
+		const response = await fetchThrough(page, { ...headers, 'x-content-type-options': 'nosniff', etag: '"source"' }, original);
+		assert.equal(response.headers.get('content-type'), headers['content-type']);
+		assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+		assert.equal(response.headers.get('etag'), '"source"');
+		assert.equal(await response.text(), original);
+	}
+});
+
+test('JSON variants vary on the manifest destination in both forwarding paths', async () => {
+	const page = 'https://example.com/app.json';
+	const json = '{"start_url":"/home"}';
+	for (const dest of ['empty', 'manifest']) {
+		const response = await fetchThrough(page, { 'content-type': 'application/json' }, json, { 'sec-fetch-dest': dest });
+		assert.match(response.headers.get('vary'), /\bSec-Fetch-Dest\b/i);
+		assert.equal((await response.json()).start_url, dest === 'manifest' ? proxy('https://example.com/home') : '/home');
+	}
 });
