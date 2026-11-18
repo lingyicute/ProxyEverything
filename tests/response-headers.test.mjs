@@ -134,3 +134,18 @@ test('streaming HTML uses the same downstream CORS policy as other media', async
 		await r.text();
 	}
 });
+
+
+test('client no-transform selects an intact, separately cacheable representation', async () => {
+	const css = 'a{background:url(tile.png)}';
+	for (const [policy, unchanged] of [
+		['max-age=0, No-Transform', true], ['extension="a,no-transform,b"', false], ['', false],
+	]) {
+		const r = await fetchThrough('https://example.com/style.css', {
+			'content-type': 'text/css', etag: '"original"', 'cache-control': 'public, max-age=60',
+		}, css, { 'cache-control': policy });
+		assert.match(r.headers.get('vary'), /\bCache-Control\b/i);
+		assert.equal(r.headers.get('etag'), unchanged ? '"original"' : null);
+		assert.equal((await r.text()) === css, unchanged);
+	}
+});

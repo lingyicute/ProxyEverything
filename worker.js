@@ -922,11 +922,27 @@ function contentCoding(headers) {
 	return headers.get('Content-Encoding')?.trim().toLowerCase() || 'identity';
 }
 
+// Cache-Control 扩展可含带引号的逗号；引号值中的文本不是独立指令。
+function hasNoTransform(value) {
+	if (!value || !/no-transform/i.test(value)) return false;
+	let start = 0, quoted = false;
+	for (let i = 0; i <= value.length; i++) {
+		const ch = value[i];
+		if (quoted && ch === '\\') { i++; continue; }
+		if (ch === '"') quoted = !quoted;
+		else if (!quoted && (ch === ',' || i === value.length)) {
+			if (value.slice(start, i).trim().toLowerCase() === 'no-transform') return true;
+			start = i + 1;
+		}
+	}
+	return false;
+}
+
 function transformKind(headers, request) {
 	// Workerd 解码 HTTP 回源的 gzip/br；其它编码不假定能解开。
 	if (!['identity', 'gzip', 'br'].includes(contentCoding(headers))) return null;
 	if (/^\s*attachment\s*(?:;|$)/i.test(headers.get('Content-Disposition') || '') ||
-		/(?:^|,)\s*no-transform\s*(?:,|$)/i.test(headers.get('Cache-Control') || '')) return null;
+		hasNoTransform(headers.get('Cache-Control'))) return null;
 	const mime = mimeType(headers.get('Content-Type'));
 	if (mime === 'text/html' || mime === 'application/xhtml+xml') return 'html';
 	if (mime === 'text/css') return 'css';
@@ -955,6 +971,7 @@ function applyCachePolicy(response, request, ck) {
 	// 不把匿名缓存条目用于后来带凭证的请求；不能只在带凭证的响应上设置 no-store。
 	addVary(response.headers, 'Cookie');
 	addVary(response.headers, 'Authorization');
+	if (request && transformKind(response.headers, request)) addVary(response.headers, 'Cache-Control');
 	const mime = mimeType(response.headers.get('Content-Type'));
 	if (mime !== 'application/manifest+json' && isJsonMime(mime)) addVary(response.headers, 'Sec-Fetch-Dest');
 	const hasCookie = Boolean(request) && (ck ? ck.hasCookie : request.headers.has('cookie'));
@@ -2866,7 +2883,9 @@ Disallow: /
 		try {
 			// 非目标媒体、附件或禁止变换的表示不会被读取或转码。
 			const kind = transformKind(upstream.headers, request);
-			if (!kind) return buildResponse(upstream, request, ck, fetchUrl);
+			if (!kind || hasNoTransform(request.headers.get('Cache-Control'))) {
+				return buildResponse(upstream, request, ck, fetchUrl);
+			}
 			const contentType = upstream.headers.get('Content-Type');
 			const baseUrl = documentBase(targetUrl);
 			const charset = getCharset(contentType);
