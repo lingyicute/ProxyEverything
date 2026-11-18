@@ -784,15 +784,7 @@ function applyCors(headers, request) {
 function buildResponse(upstream, request, ck, baseUrl) {
 	const resp = new Response(upstream.body, upstream);
 	stripResponseHeaders(resp.headers, request, baseUrl);
-	stripHopByHop(resp.headers);
-	if (ENABLE_PROXY_NOINDEX) {
-		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
-	}
-	applyCors(resp.headers, request);
-	// Set-Cookie 添加来源命名空间，避免回源时意外混用
-	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
-	applyCachePolicy(resp, request, ck);
-	return resp;
+	return applyCommon(resp, request, ck);
 }
 
 function isCacheableMethod(m) { return m === 'GET' || m === 'HEAD'; }
@@ -1686,10 +1678,6 @@ async function transformText(response, baseUrl, workerOrigin, kind, request, dec
 		const ct = (response.headers.get('content-type') || '').split(';')[0].trim();
 		resp.headers.set('content-type', (ct || 'text/plain') + '; charset=UTF-8');
 	}
-	if (ENABLE_PROXY_NOINDEX) {
-		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
-	}
-	applyCors(resp.headers, request);
 	return resp;
 }
 
@@ -2404,37 +2392,29 @@ Disallow: /wss%3A
 		// 避免 HTMLRewriter 按 meta 里的旧 charset 重新编码输出）
 		if (isHtml) {
 			const interim = makeInterim((mime || 'text/html') + '; charset=UTF-8');
-			const result = transformHtml(interim, baseUrl, workerOrigin, ck);
-			// 补一遍统一头处理
-			if (ENABLE_PROXY_NOINDEX) {
-				result.headers.set('X-Robots-Tag', 'noindex, nofollow');
-			}
-			applyCors(result.headers, request);
-			rescopeSetCookies(result.headers, ck.ns, ck.isHttps);
-			applyCachePolicy(result, request, ck);
-			return result;
+			return applyCommon(transformHtml(interim, baseUrl, workerOrigin, ck), request, ck);
 		}
 
 		// 整体缓冲的资源可能超限并转为字节透传；先保留原始表示元数据，
 		// 只有确定重写了正文时 transformText 才删除验证器并声明 UTF-8。
 		// CSS
 		if (mime.includes('text/css')) {
-			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'css', request, charset), upstream, request, ck);
+			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'css', request, charset), request, ck);
 		}
 
 		// JS：基于模块 lexer 的 URL 说明符重写
 		if (mime.includes('javascript') || mime.includes('ecmascript')) {
-			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'js', request, charset), upstream, request, ck);
+			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'js', request, charset), request, ck);
 		}
 
 		// SVG
 		if (mime.includes('image/svg+xml')) {
-			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'svg', request, charset), upstream, request, ck);
+			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'svg', request, charset), request, ck);
 		}
 
 		// Web App Manifest（图标、start_url 等）
 		if (isManifest) {
-			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'json', request, charset), upstream, request, ck);
+			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, 'json', request, charset), request, ck);
 		}
 
 		// 其它（JSON API/图片/字体/媒体/下载等）：流式透传
@@ -2447,13 +2427,14 @@ Disallow: /wss%3A
 	},
 };
 
-/** transformText 的产物再补一遍统一头处理 */
-function applyCommon(resp, upstream, request, ck) {
+/** 所有回源 HTTP 响应（含流式 HTML）共用相同的下游策略。 */
+function applyCommon(resp, request, ck) {
 	stripHopByHop(resp.headers);
-	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
 	if (ENABLE_PROXY_NOINDEX) {
 		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
 	}
+	applyCors(resp.headers, request);
+	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
 	applyCachePolicy(resp, request, ck);
 	return resp;
 }
