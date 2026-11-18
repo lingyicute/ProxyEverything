@@ -786,24 +786,44 @@ function utf8XmlDeclaration(declaration) {
 	return declaration.replace(XML_ATTR, (m, space, name) => name === 'encoding' ? `${space}encoding="UTF-8"` : m);
 }
 
-function normalizeXhtmlProlog() {
+function normalizeXhtmlProlog(stream) {
+	// 使用 ReadableStream，避免要求 Workers 额外开启自定义 TransformStream 构造器。
+	const reader = stream.getReader();
 	let prefix = '';
-	let scanning = true;
-	return new TransformStream({
-		transform(chunk, controller) {
-			if (!scanning) { controller.enqueue(chunk); return; }
-			prefix += chunk;
-			if (prefix.length <= 5 && '<?xml'.startsWith(prefix)) return;
-			if (/^<\?xml[ \t\r\n]/.test(prefix)) {
-				const end = prefix.indexOf('?>', 6);
-				if (end < 0 && prefix.length <= 4096) return;
-				if (end >= 0 && end < 4096) prefix = utf8XmlDeclaration(prefix.slice(0, end + 2)) + prefix.slice(end + 2);
+	let canceled = false;
+	return new ReadableStream({
+		async pull(controller) {
+			try {
+				for (;;) {
+					const { done, value } = await reader.read();
+					if (canceled) return;
+					if (done) {
+						if (prefix) controller.enqueue(prefix);
+						reader.releaseLock();
+						controller.close();
+						return;
+					}
+					if (prefix === null) { controller.enqueue(value); return; }
+					prefix += value;
+					if (prefix.length <= 5 && '<?xml'.startsWith(prefix)) continue;
+					if (/^<\?xml[ \t\r\n]/.test(prefix)) {
+						const end = prefix.indexOf('?>', 6);
+						if (end < 0 && prefix.length <= 4096) continue;
+						if (end >= 0 && end < 4096) prefix = utf8XmlDeclaration(prefix.slice(0, end + 2)) + prefix.slice(end + 2);
+					}
+					controller.enqueue(prefix);
+					prefix = null;
+					return;
+				}
+			} catch (error) {
+				if (!canceled) reader.releaseLock();
+				throw error;
 			}
-			controller.enqueue(prefix);
-			prefix = '';
-			scanning = false;
 		},
-		flush(controller) { if (prefix) controller.enqueue(prefix); },
+		async cancel(reason) {
+			canceled = true;
+			try { await reader.cancel(reason); } finally { reader.releaseLock(); }
+		},
 	});
 }
 
@@ -2864,7 +2884,7 @@ Disallow: /
 						const decoder = new TextDecoderStream(sniffed.charset || 'utf-8');
 						const encoder = new TextEncoderStream();
 						let text = body.pipeThrough(decoder);
-						if (isXml) text = text.pipeThrough(normalizeXhtmlProlog());
+						if (isXml) text = normalizeXhtmlProlog(text);
 						body = text.pipeThrough(encoder);
 					} catch { /* 保留当前流供 UTF-8 宽松解码 */ }
 				}
