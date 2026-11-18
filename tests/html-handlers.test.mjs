@@ -13,14 +13,14 @@ const origin = 'https://proxy.example';
 const proxy = path => origin + '/~' + encodeURIComponent('https://example.com') + path;
 
 /** HTMLRewriter 只在 Workers 运行时存在：记录各选择器的处理器，直接驱动元素回调。 */
-function collectHandlers() {
+function collectHandlers(contentType = 'text/html') {
 	const handlers = {};
 	globalThis.HTMLRewriter = class {
 		on(selector, handler) { (handlers[selector] ||= []).push(handler); return this; }
 		transform(response) { return response; }
 	};
 	try {
-		transformHtml(new Response('', { headers: { 'content-type': 'text/html' } }), base, origin, null);
+		transformHtml(new Response('', { headers: { 'content-type': contentType } }), base, origin, null);
 	} finally {
 		delete globalThis.HTMLRewriter;
 	}
@@ -94,4 +94,13 @@ test('HTML base affects anchor fragments, but not absent or empty form actions',
 		for (const h of handlers[tag]) h.element(el);
 		assert.equal(el.getAttribute(key), expected);
 	}
+});
+
+test('XHTML style uses XML escaping while ordinary HTML uses raw text', () => {
+	const input = 'a{background:url(pic.png?a=1&amp;b=2)}';
+	const xhtml = collectHandlers('application/xhtml+xml').style[0];
+	xhtml.element({});
+	let out;
+	xhtml.text({ text: input, lastInTextNode: true, replace(value) { out = value; } });
+	assert.equal(out, `a{background:url("${proxy('/dir/pic.png?a=1&amp;b=2')}")}`);
 });

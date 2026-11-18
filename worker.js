@@ -771,6 +771,37 @@ function prescanHtmlCharset(text) {
 	return null;
 }
 
+function utf16XmlSignature(head) {
+	if (head[0] === 0x3c && head[1] === 0 && head[2] === 0x3f && head[3] === 0) return 'utf-16le';
+	if (head[0] === 0 && head[1] === 0x3c && head[2] === 0 && head[3] === 0x3f) return 'utf-16be';
+	return null;
+}
+
+function utf8XmlDeclaration(declaration) {
+	return declaration.replace(XML_ATTR, (m, space, name) => name === 'encoding' ? `${space}encoding="UTF-8"` : m);
+}
+
+function normalizeXhtmlProlog() {
+	let prefix = '';
+	let scanning = true;
+	return new TransformStream({
+		transform(chunk, controller) {
+			if (!scanning) { controller.enqueue(chunk); return; }
+			prefix += chunk;
+			if (prefix.length <= 5 && '<?xml'.startsWith(prefix)) return;
+			if (/^<\?xml[ \t\r\n]/.test(prefix)) {
+				const end = prefix.indexOf('?>', 6);
+				if (end < 0 && prefix.length <= 4096) return;
+				if (end >= 0 && end < 4096) prefix = utf8XmlDeclaration(prefix.slice(0, end + 2)) + prefix.slice(end + 2);
+			}
+			controller.enqueue(prefix);
+			prefix = '';
+			scanning = false;
+		},
+		flush(controller) { if (prefix) controller.enqueue(prefix); },
+	});
+}
+
 function xmlDeclaredCharset(text) {
 	const m = /^<\?xml[ \t\r\n][^?]*\?>/.exec(text);
 	if (!m) return null;
@@ -804,6 +835,10 @@ async function sniffHtmlCharset(body, declaredCharset = null, isXml = false) {
 			if (total < 3) continue;
 			if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) { charset = 'utf-8'; break; }
 			if (declaredCharset) break;
+			if (isXml && total >= 4) {
+				charset = utf16XmlSignature(head);
+				if (charset) break;
+			}
 			const prefixText = new TextDecoder().decode(head.subarray(0, total));
 			charset = isXml ? xmlDeclaredCharset(prefixText) : prescanHtmlCharset(prefixText);
 			if (charset) break;
@@ -1877,6 +1912,8 @@ function bufferedTextHandler(rewrite, matches = () => true) {
 
 function transformHtml(response, baseUrl, workerOrigin, ck) {
 	const rewriter = new HTMLRewriter();
+	const isXml = mimeType(response.headers.get('Content-Type')) === 'application/xhtml+xml';
+	const rawText = (text, transform) => isXml ? rewriteXmlText(text, transform) : transform(text);
 	let baseHref = baseUrl;
 	let hasBaseHref = false;
 	let injected = false;
@@ -1944,13 +1981,13 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 	});
 
 	// 对 style、内联 ES module、importmap 与 speculationrules 使用同一个有界缓冲器；其它脚本原样保留。
-	rewriter.on('style', bufferedTextHandler(css => rewriteCss(css, baseHref, workerOrigin)));
+	rewriter.on('style', bufferedTextHandler(css => rawText(css, part => rewriteCss(part, baseHref, workerOrigin))));
 	rewriter.on('script', bufferedTextHandler(
-		(text, kind) => kind === 'importmap'
-			? rewriteImportMap(text, baseHref, workerOrigin)
+		(text, kind) => rawText(text, part => kind === 'importmap'
+			? rewriteImportMap(part, baseHref, workerOrigin)
 			: kind === 'speculationrules'
-				? rewriteSpeculationRules(text, baseHref, workerOrigin, baseUrl)
-				: rewriteJsModuleSpecifiers(text, baseHref, workerOrigin),
+				? rewriteSpeculationRules(part, baseHref, workerOrigin, baseUrl)
+				: rewriteJsModuleSpecifiers(part, baseHref, workerOrigin)),
 		el => {
 			if (el.hasAttribute('src') || el.hasAttribute('href') || el.hasAttribute('xlink:href')) return null;
 			const type = (getHtmlAttribute(el, 'type') || '').trim().toLowerCase();
@@ -2394,7 +2431,7 @@ function rewriteSvg(source, baseUrl, workerOrigin) {
 		const localName = qualifiedName?.split(':').pop();
 		const stylesheet = kind === 'pi' && /^<\?xml-stylesheet[ \t\n\r]/.test(tag);
 		if (kind === 'pi' && /^<\?xml[ \t\n\r]/.test(tag)) {
-			out.push(tag.replace(XML_ATTR, (m, space, name) => name === 'encoding' ? `${space}encoding="UTF-8"` : m));
+			out.push(utf8XmlDeclaration(tag));
 			continue;
 		}
 		if (!localName && !stylesheet) { out.push(tag); continue; }
@@ -2835,13 +2872,16 @@ Disallow: /
 			const charset = getCharset(contentType);
 			if (kind === 'html') {
 				// BOM 优先于 HTTP charset，最后才读文档内声明。
-				const sniffed = await sniffHtmlCharset(upstream.body, charset, mimeType(contentType) === 'application/xhtml+xml');
+				const isXml = mimeType(contentType) === 'application/xhtml+xml';
+				const sniffed = await sniffHtmlCharset(upstream.body, charset, isXml);
 				let body = sniffed.body;
-				if (body && sniffed.charset && !isUtf8Charset(sniffed.charset)) {
+				if (body && (isXml || !isUtf8Charset(sniffed.charset))) {
 					try {
-						const decoder = new TextDecoderStream(sniffed.charset);
+						const decoder = new TextDecoderStream(sniffed.charset || 'utf-8');
 						const encoder = new TextEncoderStream();
-						body = body.pipeThrough(decoder).pipeThrough(encoder);
+						let text = body.pipeThrough(decoder);
+						if (isXml) text = text.pipeThrough(normalizeXhtmlProlog());
+						body = text.pipeThrough(encoder);
 					} catch { /* 保留当前流供 UTF-8 宽松解码 */ }
 				}
 				const interim = new Response(body, upstream);
