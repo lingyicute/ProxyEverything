@@ -13,7 +13,7 @@ const origin = 'https://proxy.example';
 const proxy = path => origin + '/~' + encodeURIComponent('https://example.com') + path;
 
 /** 只提供 shim 安装钩子所需的最小浏览器环境；shim 内部异常记入 errors。 */
-function createBrowser(globals = {}) {
+function createBrowser(globals = {}, cookieNs = '') {
 	class Element {
 		constructor(tag) {
 			this.localName = tag.toLowerCase();
@@ -48,7 +48,7 @@ function createBrowser(globals = {}) {
 	Object.assign(ctx, globals);
 	ctx.window = ctx;
 	vm.createContext(ctx);
-	const code = getShimScript(origin, '').replace(/^<script>/, '').replace(/<\/script>$/, '');
+	const code = getShimScript(origin, cookieNs).replace(/^<script>/, '').replace(/<\/script>$/, '');
 	const run = () => vm.runInContext(code, ctx);
 	run();
 	assert.deepEqual(errors, []);
@@ -161,4 +161,19 @@ test('shim srcset uses the same URL boundaries and leaves data candidates alone'
 	const image = new ctx.Element('img');
 	image.setAttribute('srcset', 'first,a.png 1x, data:image/gif;base64,token 2x, last.png,, ');
 	assert.equal(image.getAttribute('srcset'), `${proxy('/dir/first,a.png')} 1x, data:image/gif;base64,token 2x, ${proxy('/dir/last.png')},, `);
+});
+
+test('document.cookie shares protected cookie names without accepting HTTP-only writes', () => {
+	const ns = '__pe_fixture_';
+	let last = '';
+	class Document {
+		get cookie() { return `__Host-${ns}pref=one; ${ns}__Host-old=stale; other=unrelated`; }
+		set cookie(value) { last = value; }
+	}
+	const { ctx } = createBrowser({ Document }, ns);
+	assert.equal(ctx.document.cookie, '__Host-pref=one');
+	ctx.document.cookie = '__Http-server=2; HttpOnly; Secure';
+	assert.equal(last, '');
+	ctx.document.cookie = '__Host-pref=two; Secure; Path=/';
+	assert.equal(last, `__Host-${ns}pref=two; Secure; Path=/`);
 });

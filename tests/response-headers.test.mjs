@@ -4,8 +4,8 @@ import test from 'node:test';
 
 // Load the standalone Worker as an ES module without changing its deployment exports.
 const source = await readFile(new URL('../worker.js', import.meta.url), 'utf8');
-const { default: worker } = await import(
-	'data:text/javascript;base64,' + Buffer.from(source).toString('base64')
+const { default: worker, scopeRequestCookie } = await import(
+	'data:text/javascript;base64,' + Buffer.from(source + '\nexport { scopeRequestCookie };').toString('base64')
 );
 
 const origin = 'https://proxy.example';
@@ -190,4 +190,23 @@ test('bodyless responses do not advertise source metadata for a rewritten GET', 
 			assert.equal(r.headers.get(field), intact ? upstream.headers.get(field) : null, field);
 		}
 	}
+});
+
+test('reserved cookie prefixes remain browser-visible and require their original attributes', async () => {
+	const target = 'https://example.com/cookies';
+	const headers = new Headers();
+	for (const value of [
+		'__Host-a=1; Secure; Path=/', '__Secure-b=2; Secure', '__Http-c=3; HttpOnly; Secure',
+		'__Host-Http-d=4; HttpOnly; Secure; Path=/', 'ordinary=5',
+		'__Host-missing-path=x; Secure', '__Host-domain=x; Secure; Path=/; Domain=example.com',
+		'__Host-wrong-path=x; Secure; Path=/sub', '__Secure-no-tls=x; SameSite=None',
+		'__Http-missing-http=x; Secure', '__Host-Http-missing-secure=x; HttpOnly; Path=/',
+	]) headers.append('Set-Cookie', value);
+	const r = await fetchThrough(target, headers);
+	const names = r.headers.getSetCookie().map(c => c.split(';')[0]);
+	const key = encodeURIComponent(new URL(target).origin);
+	const ns = '__pe_' + key.length.toString(36) + '_' + key + '_';
+	assert.deepEqual(names, [`__Host-${ns}a=1`, `__Secure-${ns}b=2`, `__Http-${ns}c=3`, `__Host-Http-${ns}d=4`, `${ns}ordinary=5`]);
+	assert.equal(scopeRequestCookie([...names, ns + '__Host-old=x'].join('; '), ns),
+		'__Host-a=1; __Secure-b=2; __Http-c=3; __Host-Http-d=4; ordinary=5');
 });

@@ -572,12 +572,25 @@ function cookieNamespace(targetUrl) {
 	return COOKIE_PREFIX + key.length.toString(36) + '_' + key + '_';
 }
 
+// 浏览器依据名字开头执行前缀规则，命名空间必须放在保留前缀之后。
+function reservedCookiePrefix(name) {
+	return /^__(?:Host-Http|Host|Http|Secure)-/i.exec(name)?.[0] || '';
+}
+
+function originalCookieName(stored, ns) {
+	const prefix = reservedCookiePrefix(stored);
+	if (!stored.startsWith(ns, prefix.length)) return null;
+	const name = prefix + stored.slice(prefix.length + ns.length);
+	// 不接受旧版隐藏了保留前缀的名字，浏览器写入它们时没有验证相应约束。
+	return reservedCookiePrefix(name) === prefix ? name : null;
+}
+
 /**
  * 改写上游 Set-Cookie：加命名空间前缀、强制 Path=/、去掉 Domain，
  * 确保 Secure / SameSite=None / Partitioned 不会被降级。
  * 返回 null 表示这条 cookie 无效、应丢弃。
  */
-function scopeSetCookie(c, ns, workerIsHttps) {
+function scopeSetCookie(c, ns, workerIsHttps, fromScript = false) {
 	const parts = String(c).split(';');
 	const head = parts[0];
 	const eq = head.indexOf('=');
@@ -586,7 +599,9 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 	if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(name)) return null;
 	const value = head.slice(eq + 1).trim();
 
-	const out = [`${ns}${name}=${value}`];
+	const prefix = reservedCookiePrefix(name);
+	const out = [`${prefix}${ns}${name.slice(prefix.length)}=${value}`];
+	let path = null, hasDomain = false, hasHttpOnly = false;
 	let sameSiteNone = false;
 	let hasSecure = false;
 	let hasPartitioned = false;
@@ -594,9 +609,14 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 	for (const raw of parts.slice(1)) {
 		const part = raw.trim();
 		if (!part) continue;
-		const attr = part.slice(0, part.indexOf('=') === -1 ? undefined : part.indexOf('=')).trim().toLowerCase();
-		// Domain / Path 一律由我们接管
-		if (attr === 'domain' || attr === 'path') continue;
+		const split = part.indexOf('=');
+		const attr = part.slice(0, split < 0 ? undefined : split).trim().toLowerCase();
+		if (attr === 'domain') { hasDomain = true; continue; }
+		if (attr === 'path') { path = split < 0 ? '' : part.slice(split + 1).trim(); continue; }
+		if (attr === 'httponly') {
+			if (fromScript) return null;
+			hasHttpOnly = true;
+		}
 		if (attr === 'secure') {
 			if (!workerIsHttps) return null;
 			if (!hasSecure) { out.push('Secure'); hasSecure = true; }
@@ -624,6 +644,9 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 		out.push(part);
 	}
 
+	if (prefix && !hasSecure) return null;
+	if (/^__host-/i.test(prefix) && (hasDomain || path !== '/')) return null;
+	if (/http-$/i.test(prefix) && !hasHttpOnly) return null;
 	out.push('Path=/');
 	// SameSite=None / Partitioned 必须伴随 Secure，否则现代浏览器拒绝写入
 	if (sameSiteNone && workerIsHttps && !hasSecure) out.push('Secure');
@@ -647,9 +670,8 @@ function parseCookieHeader(header) {
  */
 function scopeRequestCookie(header, ns) {
 	const mine = parseCookieHeader(header)
-		.filter(([n]) => n.startsWith(ns))
-		.map(([n, v]) => [n.slice(ns.length), v])
-		.filter(([n]) => /^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(n));
+		.map(([n, v]) => [originalCookieName(n, ns), v])
+		.filter(([n]) => n && /^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(n));
 	const kept = [];
 	let len = 0;
 	for (const [n, v] of mine) {
@@ -1374,6 +1396,8 @@ if(window.Element){
    服务端下发的 cookie 名带 CK 前缀；页面脚本应当只看到原始名字。 */
 try{
 if(CK){
+  ${reservedCookiePrefix.toString()}
+  ${originalCookieName.toString()}
   var scopeCookie=${scopeSetCookie.toString()};
   var CD=Object.getOwnPropertyDescriptor(Document.prototype,'cookie')||
          Object.getOwnPropertyDescriptor(HTMLDocument.prototype,'cookie');
@@ -1386,15 +1410,14 @@ if(CK){
         var parts=raw.split(';');
         for(var i=0;i<parts.length;i++){
           var p=parts[i].replace(/^\\s+/,'');
-          if(p.indexOf(CK)===0){
-            var rest=p.substring(CK.length);
-            if(rest.indexOf('=')>0)out.push(rest);
-          }
+          var eq=p.indexOf('=');
+          var name=eq<0?null:originalCookieName(p.slice(0,eq),CK);
+          if(name)out.push(name+p.slice(eq));
         }
         return out.join('; ');
       },
       set:function(v){
-        var scoped=scopeCookie(v,CK,location.protocol==='https:'&&new URL(currentTarget()).protocol==='https:');
+        var scoped=scopeCookie(v,CK,location.protocol==='https:'&&new URL(currentTarget()).protocol==='https:',true);
         if(scoped===null)return;
         return CD.set.call(this,scoped);
       }
