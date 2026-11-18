@@ -2622,6 +2622,31 @@ function buildUpstreamHeaders(request, workerOrigin, destination, env) {
 // WebSocket 代理
 // ============================================================
 
+function bridgeWebSockets(upstream, client) {
+	const closing = new Set();
+	const close = (socket, code, reason) => {
+		if (closing.has(socket) || socket.readyState === 3) return;
+		closing.add(socket);
+		try {
+			if (code === 1005 || !code) socket.close();
+			else socket.close([1006, 1015].includes(code) ? 1011 : code, reason);
+		} catch {
+			try { socket.close(1011); } catch { /* 已由运行时终止 */ }
+		}
+	};
+	const pipe = (from, to) => {
+		const closeBoth = (code, reason) => { close(to, code, reason); close(from, code, reason); };
+		from.addEventListener('message', ev => {
+			if (to.readyState !== 1) return;
+			try { to.send(ev.data); } catch { closeBoth(1011, 'proxy send failed'); }
+		});
+		from.addEventListener('close', ev => closeBoth(ev.code, ev.reason));
+		from.addEventListener('error', () => closeBoth(1011, 'proxy socket error'));
+	};
+	pipe(upstream, client);
+	pipe(client, upstream);
+}
+
 async function handleWebSocket(request, targetUrl, ck, workerOrigin, env) {
 	// ws/wss → http/https 供 fetch 建立上游连接
 	const upstreamUrl = new URL(targetUrl.href);
@@ -2630,6 +2655,8 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin, env) {
 
 	const headers = buildUpstreamHeaders(request, workerOrigin, upstreamUrl, env);
 	applyRequestCookieScope(headers, request, ck.ns);
+	// 两段连接分别握手，key、版本和扩展由 Workers 运行时协商。
+	for (const name of ['sec-websocket-key', 'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-accept']) headers.delete(name);
 	headers.set('Connection', 'Upgrade');
 	headers.set('Upgrade', 'websocket');
 
@@ -2640,35 +2667,14 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin, env) {
 		if (resp.body) resp.body.cancel().catch(() => {});
 		return new Response('上游不支持 WebSocket（不自动跟随重定向）', { status: 502 });
 	}
-	// 新兼容日期下 binaryType 可以默认是 blob；send(Blob) 可能被转为字符串。
-	// 两个方向都显式使用 ArrayBuffer，保留二进制帧而不引入异步转换/乱序。
-	upstream.binaryType = 'arraybuffer';
-	upstream.accept();
-
 	const pair = new WebSocketPair();
 	const client = pair[0];
+	upstream.binaryType = 'arraybuffer';
 	client.binaryType = 'arraybuffer';
-	client.accept();
-
-	const pipe = (from, to) => {
-		from.addEventListener('message', ev => {
-			try { to.send(ev.data); } catch {}
-		});
-		from.addEventListener('close', ev => {
-			// 1005/1006/1015 是状态标记，不允许写入关闭帧；若状态码或超长 reason 被拒绝则优先保留状态码，再回退 1000。
-			const code = ev.code === 1005 ? 1000 : [1006, 1015].includes(ev.code) ? 1011 : ev.code;
-			try { to.close(code, ev.reason); } catch {
-				try { to.close(code); } catch {
-					try { to.close(1000, ev.reason); } catch { try { to.close(1000); } catch {} }
-				}
-			}
-		});
-		from.addEventListener('error', () => {
-			try { to.close(1011, 'upstream error'); } catch { try { to.close(1000); } catch {} }
-		});
-	};
-	pipe(upstream, client);
-	pipe(client, upstream);
+	// 新兼容日期默认自动回复 Close。代理需将关闭码传给另一端并显式确认两段握手。
+	upstream.accept({ allowHalfOpen: true });
+	client.accept({ allowHalfOpen: true });
+	bridgeWebSockets(upstream, client);
 
 	// 转发协商出的子协议及握手 Cookie；不要复用上游的 Accept/Upgrade 头。
 	const responseHeaders = new Headers(resp.headers);

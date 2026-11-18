@@ -5,9 +5,9 @@ import vm from 'node:vm';
 
 // Load the standalone Worker as an ES module without changing its deployment exports.
 const source = await readFile(new URL('../worker.js', import.meta.url), 'utf8');
-const { default: worker, rewriteCss, rewriteLazyValue, rewriteSvg, cookieNamespace, getShimScript, rewriteJsonUrls } = await import(
+const { default: worker, rewriteCss, rewriteLazyValue, rewriteSvg, cookieNamespace, getShimScript, rewriteJsonUrls, bridgeWebSockets } = await import(
 	'data:text/javascript;base64,' + Buffer.from(source +
-		'\nexport { rewriteCss, rewriteLazyValue, rewriteSvg, cookieNamespace, getShimScript, rewriteJsonUrls };').toString('base64')
+		'\nexport { rewriteCss, rewriteLazyValue, rewriteSvg, cookieNamespace, getShimScript, rewriteJsonUrls, bridgeWebSockets };').toString('base64')
 );
 
 const base = 'https://example.com/dir/page';
@@ -180,10 +180,12 @@ test('WebSocket forwards only an HTTP(S) source established by the referring pag
 	const target = proxy('wss://example.com/socket');
 	// URL.origin keeps wss: and the worker normalizes that to https: for subrequests.
 	for (const [source, expected] of [[undefined, 'null'], [referer, 'https://example.com']]) {
-		const headers = { upgrade: 'websocket', origin };
+		const headers = { upgrade: 'websocket', origin, 'sec-websocket-key': 'marker', 'sec-websocket-protocol': 'chat' };
 		if (source) headers.referer = source;
 		assert.equal((await send(target, { headers })).status, 502, 'the stub does not upgrade');
 		assert.equal(forwarded.url, 'https://example.com/socket');
+		assert.equal(forwarded.headers.get('sec-websocket-key'), null);
+		assert.equal(forwarded.headers.get('sec-websocket-protocol'), 'chat');
 		assert.equal(forwarded.headers.get('origin'), expected);
 		assert.equal(forwarded.headers.get('referer'), source ? 'https://example.com/dir/page?secret=1' : null);
 	}
@@ -197,4 +199,27 @@ test('CSS recognizes escaped url functions in namespace declarations', () => {
 		namespace + `a{background:url("${proxy('pic.png')}")}`);
 	const invalid = 'a{background:url(/*not syntax here*/"pic.png")}';
 	assert.equal(rewriteCss(invalid, base, origin), invalid);
+});
+
+test('WebSocket bridge forwards binary frames and confirms each half of a close', () => {
+	function socket() {
+		const listeners = new Map();
+		return {
+			readyState: 1, messages: [], closes: [],
+			addEventListener(type, fn) { listeners.set(type, fn); },
+			emit(type, event) { listeners.get(type)(event); },
+			send(data) { this.messages.push(data); },
+			close(...args) { this.closes.push(args); this.readyState = 2; },
+		};
+	}
+	const client = socket();
+	const upstream = socket();
+	bridgeWebSockets(upstream, client);
+	const data = new Uint8Array([1, 255]).buffer;
+	client.emit('message', { data });
+	assert.deepEqual(upstream.messages, [data]);
+	upstream.emit('close', { code: 4000, reason: 'done' });
+	client.emit('close', { code: 4000, reason: 'done' });
+	assert.deepEqual(client.closes, [[4000, 'done']]);
+	assert.deepEqual(upstream.closes, [[4000, 'done']]);
 });
