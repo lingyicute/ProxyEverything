@@ -36,6 +36,15 @@ test('Refresh response header is rewritten through the proxy instead of dropped'
 		const response = await fetchThrough(page, { 'content-type': contentType, refresh: value }, 'a{}');
 		assert.equal(response.headers.get('refresh'), expected, contentType);
 	}
+
+	const connResp = await fetchThrough(page, {
+		'content-type': 'text/plain',
+		refresh: '2; url=/done',
+		connection: 'Refresh, X-Hop',
+		'x-hop': '1',
+	}, 'ok');
+	assert.equal(connResp.headers.get('refresh'), `2; url=${proxy('https://example.com/done')}`);
+	assert.equal(connResp.headers.get('x-hop'), null);
 });
 
 test('origin-wide persistent policy headers do not leak onto the shared proxy origin', async () => {

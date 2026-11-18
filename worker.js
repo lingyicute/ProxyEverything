@@ -66,7 +66,7 @@ const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 // 禁止 Connection 头夹带并借机剥除端到端关键语义头（RFC 9110 §7.6.1）
 const PROTECTED_END_TO_END = new Set([
 	'content-type', 'content-length', 'content-encoding', 'content-range', 'content-language',
-	'set-cookie', 'cookie', 'location', 'cache-control', 'vary',
+	'set-cookie', 'cookie', 'location', 'refresh', 'cache-control', 'vary',
 	'host', 'origin', 'referer', 'authorization', 'range',
 	'if-none-match', 'if-modified-since', 'if-match', 'if-unmodified-since', 'if-range',
 	'etag', 'last-modified', 'accept-ranges', 'content-disposition',
