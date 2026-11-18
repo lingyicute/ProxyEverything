@@ -210,3 +210,14 @@ test('reserved cookie prefixes remain browser-visible and require their original
 	assert.equal(scopeRequestCookie([...names, ns + '__Host-old=x'].join('; '), ns),
 		'__Host-a=1; __Secure-b=2; __Http-c=3; __Host-Http-d=4; ordinary=5');
 });
+
+test('cacheable scripts vary on both service-worker request markers', async () => {
+	for (const type of ['text/javascript', 'application/octet-stream']) {
+		const r = await fetchThrough('https://example.com/script', {
+			'content-type': type, 'cache-control': 'public, max-age=60',
+		});
+		const vary = r.headers.get('vary').toLowerCase().split(/,\s*/);
+		assert.ok(vary.includes('service-worker'));
+		assert.ok(vary.includes('sec-fetch-dest'));
+	}
+});

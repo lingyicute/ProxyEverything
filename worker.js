@@ -995,8 +995,9 @@ function applyCachePolicy(response, request, ck) {
 	addVary(response.headers, 'Cookie');
 	addVary(response.headers, 'Authorization');
 	if (request && transformKind(response.headers, request)) addVary(response.headers, 'Cache-Control');
-	const mime = mimeType(response.headers.get('Content-Type'));
-	if (mime !== 'application/manifest+json' && isJsonMime(mime)) addVary(response.headers, 'Sec-Fetch-Dest');
+	// 缓存也必须区分会被入口拒绝的 Service Worker 脚本请求。
+	addVary(response.headers, 'Service-Worker');
+	addVary(response.headers, 'Sec-Fetch-Dest');
 	const hasCookie = Boolean(request) && (ck ? ck.hasCookie : request.headers.has('cookie'));
 	if (response.status >= 500 || response.headers.has('set-cookie') ||
 		(request && (!isCacheableMethod(request.method) || hasCookie ||
