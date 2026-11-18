@@ -123,3 +123,17 @@ test('canceling an oversized stream releases the upstream reader', async () => {
 	assert.equal(canceled, 'consumer stopped');
 	assert.equal(stream.locked, false);
 });
+
+test('CSS only sniffs the exact @charset byte signature within the first 1024 bytes', async () => {
+	for (const prefix of ["@charset 'windows-1252';", '@CHARSET "windows-1252";',
+		'@charset  "windows-1252";', '@charset "windows-1252" ;',
+		'@charset "' + ' '.repeat(1010) + 'windows-1252";']) {
+		const css = prefix + 'a{content:"海"}';
+		const r = await proxyResponse(Buffer.from(css), 'text/css', '/sheet.css');
+		assert.equal(await r.text(), css);
+	}
+	const prefix = '@charset "' + ' '.repeat(1000) + 'windows-1252";';
+	assert.equal(prefix.length, 1024);
+	const r = await proxyResponse(Buffer.from(prefix + 'a{content:"é"}', 'latin1'), 'text/css', '/sheet.css');
+	assert.equal(await r.text(), '@charset "UTF-8";a{content:"é"}');
+});

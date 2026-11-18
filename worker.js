@@ -2124,19 +2124,23 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 // CSS / JS / SVG / JSON / Manifest 文本重写（整体缓冲）
 // ============================================================
 
+// CSS Syntax §3.2 指定字节签名而非一般 at-rule；含终止符最多 1024 字节。
+const CSS_CHARSET_SIGNATURE = /^@charset "([\x00-\x21\x23-\x7f]{0,1012})";/;
+
 /**
  * 限制整体缓冲的原始输入字节量；不信任 Content-Length（可缺失/虚报）。
  * 超过 2 MiB 上限时把已读分片与剩余流无缝拼接，原样透传正文及其表示元数据。
  */
 function sniffTextCharset(bytes, kind, declaredCharset = null) {
-	const head = bytes.subarray(0, 256);
+	const head = bytes.subarray(0, kind === 'css' ? 1024 : 256);
 	if (head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
 	if (head[0] === 0xfe && head[1] === 0xff) return 'utf-16be';
 	if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) return 'utf-8';
 	if (declaredCharset) return declaredCharset;
 	if (kind === 'css') {
-		const m = /^@charset\s+(?:"([^"]{1,64})"|'([^']{1,64})')\s*;/i.exec(new TextDecoder().decode(head));
-		if (m) return normalizeCharsetLabel(m[1] || m[2], true) || 'utf-8';
+		const m = CSS_CHARSET_SIGNATURE.exec(new TextDecoder().decode(head));
+		const label = m && normalizeCharsetLabel(m[1]);
+		if (label && !/^utf-16(?:le|be)$/.test(label)) return label;
 	}
 	if (kind === 'svg') {
 		return utf16XmlSignature(head) || xmlDeclaredCharset(new TextDecoder().decode(head)) || 'utf-8';
@@ -2216,7 +2220,7 @@ async function transformText(response, baseUrl, workerOrigin, kind, request, dec
 		let text = rawText;
 		try {
 			if (kind === 'css') {
-				text = rewriteCss(text, baseUrl, workerOrigin).replace(/^@charset\s+(?:"[^"]*"|'[^']*')\s*;/i, '@charset "UTF-8";');
+				text = rewriteCss(text, baseUrl, workerOrigin).replace(CSS_CHARSET_SIGNATURE, '@charset "UTF-8";');
 			} else if (kind === 'js') {
 				text = rewriteJsModuleSpecifiers(text, baseUrl, workerOrigin);
 			} else if (kind === 'svg') {
