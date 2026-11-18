@@ -62,3 +62,19 @@ test('html: URL attributes are only written back when the rewrite changes them',
 	assert.equal(run('button', { formaction: '', formmethod: 'dialog' }).getAttribute('formaction'), '');
 	assert.equal(run('button', { formaction: '' }).getAttribute('formaction'), proxy('/dir/page'));
 });
+
+test('HTMLRewriter URL and style attributes decode references once and escape serialization', () => {
+	const handlers = collectHandlers();
+	const image = element('img', { src: 'a&#47;b&sol;c.png?x=1&amp;y=2&copy=raw' });
+	handlers.img[0].element(image);
+	assert.equal(image.getAttribute('src'), proxy('/dir/a/b/c.png?x=1&amp;y=2&amp;copy=raw'));
+
+	const link = element('a', { href: '&#35;anchor' });
+	handlers.a[0].element(link);
+	assert.deepEqual(link.writes, []);
+
+	const panel = element('div', { style: 'background:url(&quot;tile.png?a=1&amp;b=2&quot;)' });
+	panel.before = () => {};
+	handlers['*'][0].element(panel);
+	assert.equal(panel.getAttribute('style'), `background:url(&quot;${proxy('/dir/tile.png?a=1&amp;b=2')}&quot;)`);
+});
