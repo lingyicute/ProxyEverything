@@ -2287,6 +2287,21 @@ return parse;
 })();
 // END VENDORED ES MODULE LEXER
 
+/** HTML 的 URL-like module specifier：只有 /、./、../ 开头才带基址解析。 */
+function rewriteModuleSpecifier(specifier, baseUrl, workerOrigin) {
+	// 为保持幂等，已是代理路径的说明符不能按目标站点路径再次包装。
+	if (isProxiedPath(specifier)) return rewriteUrl(specifier, baseUrl, workerOrigin);
+	try {
+		const resolved = /^(?:\/|\.\.?\/)/.test(specifier)
+			? new URL(specifier, baseUrl) : new URL(specifier);
+		if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return specifier;
+		return rewriteUrl(resolved.href, baseUrl, workerOrigin);
+	} catch {
+		// 裸说明符和无法解析的 URL 交给浏览器及 import map 原样处理。
+		return specifier;
+	}
+}
+
 /**
  * 只改写真正的模块说明符，保留注释、字符串、正则及 import attributes。
  * lexer 的 n 已解码 JS 转义；重新序列化整段字符串，不能直接拼回原引号。
@@ -2302,9 +2317,8 @@ function rewriteJsModuleSpecifiers(js, baseUrl, workerOrigin) {
 	let cursor = 0;
 	for (const item of imports) {
 		const spec = item.n;
-		if (typeof spec !== 'string' ||
-			!(/^(?:\.\.?\/|\/|https?:\/\/)/i.test(spec))) continue;
-		const rewritten = rewriteUrl(spec, baseUrl, workerOrigin);
+		if (typeof spec !== 'string') continue;
+		const rewritten = rewriteModuleSpecifier(spec, baseUrl, workerOrigin);
 		if (rewritten === spec) continue;
 		// 静态说明符 s/e 不含引号；动态说明符 s/e 包含整个字面量。
 		const start = item.d === -1 ? item.s - 1 : item.s;
@@ -2327,18 +2341,13 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 	let map;
 	try { map = JSON.parse(text); } catch { return text; }
 	if (!map || typeof map !== 'object' || Array.isArray(map)) return text;
-	const isUrlLike = s => /^(?:\.\.?\/|\/|[a-z][a-z0-9+.-]*:)/i.test(s);
 	const rewriteSpecMap = (specMap) => {
 		if (!specMap || typeof specMap !== 'object' || Array.isArray(specMap)) return specMap;
 		// 模块名是任意 JSON 键，__proto__ 也必须作为普通属性保留。
 		const next = Object.create(null);
 		for (const [k, v] of Object.entries(specMap)) {
-			const rwKey = /^(?:\.\.?\/|\/|https?:\/\/)/i.test(k)
-				? rewriteUrl(k, baseUrl, workerOrigin)
-				: k;
-			next[rwKey] = typeof v === 'string' && isUrlLike(v)
-				? rewriteUrl(v, baseUrl, workerOrigin)
-				: v;
+			const rwKey = rewriteModuleSpecifier(k, baseUrl, workerOrigin);
+			next[rwKey] = typeof v === 'string' ? rewriteModuleSpecifier(v, baseUrl, workerOrigin) : v;
 		}
 		return next;
 	};
