@@ -1178,16 +1178,20 @@ function normTag(el){
   var idx=raw.indexOf(':');
   return idx>=0?raw.slice(idx+1):raw;
 }
+function rwNavigation(sv,emptyUsesBase){
+  var trimmed=sv.trim();
+  if(!trimmed)return emptyUsesBase?rp(base()):sv;
+  if(trimmed.charAt(0)==='#'){
+    var b=base();
+    if(b!==currentTarget())return rp(new URL(trimmed,b).href);
+  }
+  return rp(sv);
+}
 function rwAttrVal(el,tag,attr,kind,sv){
   if(kind===1)return rwSrcset(sv);
   if(kind===2)return rwPing(sv);
-  if(!sv.trim()){
-    var fm=(el&&el.getAttribute&&(el.getAttribute(attr==='formaction'?'formmethod':'method')||'')||'').trim().toLowerCase();
-    var hasBase=Boolean(document.querySelector&&document.querySelector('base[data-pe-base],base[href]'));
-    if((tag==='FORM'&&attr==='action'&&fm!=='dialog')||(attr==='formaction'&&fm!=='dialog')||(hasBase&&(attr==='href'||attr==='xlink:href'))){
-      return rp(base());
-    }
-  }
+  if(attr==='action'||attr==='formaction')return rwNavigation(sv,false);
+  if((tag==='A'||tag==='AREA')&&(attr==='href'||attr==='xlink:href'))return rwNavigation(sv,true);
   return rp(sv);
 }
 if(window.Element){
@@ -1318,14 +1322,14 @@ function rwLinkEv(ev){
     var el=t&&t.closest?t.closest('a,area'):null;
     if(!el)return;
     var h=el.getAttribute('href');
-    if(h!==null){var p=rp(h.trim()||base());if(p&&p!==h)el.setAttribute('href',p);}
+    if(h!==null){var p=rwNavigation(h,true);if(p&&p!==h)el.setAttribute('href',p);}
     if(el.hasAttributeNS&&el.hasAttributeNS(XLINK_NS,'href')){
       var xhNs=el.getAttributeNS(XLINK_NS,'href');
-      var pxNs=rp(xhNs.trim()||base());
+      var pxNs=rwNavigation(xhNs,true);
       if(pxNs&&pxNs!==xhNs)el.setAttributeNS(XLINK_NS,'xlink:href',pxNs);
     }else{
       var xh=el.getAttribute('xlink:href');
-      if(xh!==null){var px=rp(xh.trim()||base());if(px&&px!==xh)el.setAttribute('xlink:href',px);}
+      if(xh!==null){var px=rwNavigation(xh,true);if(px&&px!==xh)el.setAttribute('xlink:href',px);}
     }
     var pg=el.getAttribute('ping');
     if(pg){var ppg=rwPing(pg);if(ppg&&ppg!==pg)el.setAttribute('ping',ppg);}
@@ -1337,19 +1341,13 @@ document.addEventListener('contextmenu',rwLinkEv,true);
 function rwForm(f,sub){
   try{
     if(!f||normTag(f)!=='FORM')return;
-    var m=(f.getAttribute('method')||'').trim().toLowerCase();
     var a=f.getAttribute('action');
-    var at=a!==null?a.trim():null;
-    if(at){var p=rp(at);if(p&&p!==a)f.setAttribute('action',p);}
-    else if(m!=='dialog'&&(at===''||document.querySelector('base[data-pe-base],base[href]'))){
-      f.setAttribute('action',rp(base()));
-    }
+    if(a&&a.trim()){var p=rwNavigation(a,false);if(p!==a)f.setAttribute('action',p);}
     if(sub&&sub.getAttribute){
-      var sfm=(sub.getAttribute('formmethod')||'').trim().toLowerCase();
       var fa=sub.getAttribute('formaction');
-      if(fa!==null&&(fa.trim()||sfm!=='dialog')){
-        var pfa=rp(fa.trim()||base());
-        if(pfa&&pfa!==fa)sub.setAttribute('formaction',pfa);
+      if(fa&&fa.trim()){
+        var pfa=rwNavigation(fa,false);
+        if(pfa!==fa)sub.setAttribute('formaction',pfa);
       }
     }
   }catch(e){}
@@ -1925,11 +1923,6 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			element(el) {
 				// 内容被我们改写过的资源必须去掉 SRI，否则哈希校验失败被浏览器拦截
 				if (tag === 'script' || tag === 'link') el.removeAttribute('integrity');
-				const isDialogForm = tag === 'form' &&
-					(getHtmlAttribute(el, 'method') || '').trim().toLowerCase() === 'dialog';
-				if (tag === 'form' && !isDialogForm && hasBaseHref && !el.hasAttribute('action')) {
-					setHtmlAttribute(el, 'action', rw(baseHref));
-				}
 				for (const [attr, kind] of attrs) {
 					const v = getHtmlAttribute(el, attr);
 					if (v == null) continue;
@@ -1940,12 +1933,15 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 						const trimmed = v.trim();
 						if (!trimmed) continue;
 						next = trimmed.split(/\s+/).map(rw).join(' ');
-					} else if (!v.trim() && ((tag === 'form' && !isDialogForm) ||
-						(attr === 'formaction' && (getHtmlAttribute(el, 'formmethod') || '').trim().toLowerCase() !== 'dialog') ||
-						(hasBaseHref && (attr === 'href' || attr === 'xlink:href' || attr === 'action')))) {
-						next = rw(baseHref);
 					} else {
-						next = rw(v);
+						const trimmed = v.trim();
+						const isFormAction = attr === 'action' || attr === 'formaction';
+						const isAnchor = (tag === 'a' || tag === 'area') && (attr === 'href' || attr === 'xlink:href');
+						// 缺省或空的 form action 始终使用文档地址，不使用 <base>。
+						if (!trimmed && isFormAction) continue;
+						if (hasBaseHref && (isAnchor || isFormAction) && (trimmed === '' || trimmed.startsWith('#'))) {
+							next = rw(new URL(trimmed, baseHref).href);
+						} else next = rw(v);
 					}
 					// 页内锚点、javascript:/mailto:/data: 等不变的值无需跨运行时回写（与通配处理器一致）。
 					if (next !== v) setHtmlAttribute(el, attr, next);

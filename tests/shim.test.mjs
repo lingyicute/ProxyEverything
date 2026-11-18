@@ -116,3 +116,17 @@ test('shim: re-executing an injected copy keeps the hooks installed once', () =>
 	img.setAttribute('src', 'a.png');
 	assert.equal(img.getAttribute('src'), proxy('/dir/a.png'));
 });
+
+test('shim: an empty action keeps the current document even when a base is present', () => {
+	const { ctx } = createBrowser();
+	ctx.document.querySelectorAll = () => [{ getAttribute: () => 'https://example.com/other/' }];
+	const form = new ctx.Element('form');
+	const button = new ctx.Element('button');
+	const link = new ctx.Element('a');
+	form.setAttribute('action', '');
+	button.setAttribute('formaction', '');
+	link.setAttribute('href', '#heading');
+	assert.equal(form.getAttribute('action'), '');
+	assert.equal(button.getAttribute('formaction'), '');
+	assert.equal(link.getAttribute('href'), proxy('/other/#heading'));
+});
