@@ -13,7 +13,7 @@ const {
 	rewriteJsModuleSpecifiers,
 	rewriteRefreshContent,
 	rewriteStyleAttr,
-	rewriteSvg,
+	rewriteSvg, rewriteXmlText,
 	rewriteUrl,
 	sniffHtmlCharset,
 	stringifyInlineJson,
@@ -22,7 +22,7 @@ const {
 export {
 	getRootHtml, getShimScript, quoteCssString, rewriteCss,
 	rewriteJsModuleSpecifiers, rewriteRefreshContent, rewriteStyleAttr,
-	rewriteSvg, rewriteUrl, sniffHtmlCharset, stringifyInlineJson
+	rewriteSvg, rewriteXmlText, rewriteUrl, sniffHtmlCharset, stringifyInlineJson
 };`).toString('base64')
 );
 
@@ -354,4 +354,12 @@ test('HTML charset prescan recognizes only complete metadata declarations', asyn
 	const sniffed = await sniffHtmlCharset(new Response(xhtml).body, null, true);
 	assert.equal(sniffed.charset, 'windows-1252');
 	await sniffed.body.cancel();
+});
+
+test('XML raw text leaves incomplete CDATA and comments intact', () => {
+	for (const input of ['body <![CDATA[unfinished', 'text <!-- open <!-- still open']) {
+		assert.equal(rewriteXmlText(input, value => value.toUpperCase()), input);
+	}
+	assert.equal(rewriteXmlText('a<!--keep--><![CDATA[b]]>c', s => s.toUpperCase()),
+		'A<!--keep--><![CDATA[B]]>C');
 });

@@ -2445,10 +2445,17 @@ function rewriteXmlText(body, transform) {
 	};
 	let out = '';
 	let last = 0;
-	for (const cm of body.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->/g)) {
-		out += rewritePart(body.slice(last, cm.index));
-		out += cm[1] === undefined ? cm[0] : `<![CDATA[${transform(cm[1]).replace(/]]>/g, ']]]]><![CDATA[>')}]]>`;
-		last = cm.index + cm[0].length;
+	const opener = /<!\[CDATA\[|<!--/g;
+	let match;
+	while ((match = opener.exec(body))) {
+		const cdata = match[0] === '<![CDATA[';
+		const end = body.indexOf(cdata ? ']]>' : '-->', opener.lastIndex);
+		if (end < 0) return body;
+		out += rewritePart(body.slice(last, match.index));
+		out += cdata
+			? `<![CDATA[${transform(body.slice(opener.lastIndex, end)).replace(/]]>/g, ']]]]><![CDATA[>')}]]>`
+			: body.slice(match.index, end + 3);
+		last = opener.lastIndex = end + 3;
 	}
 	return out + rewritePart(body.slice(last));
 }
