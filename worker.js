@@ -362,7 +362,7 @@ function skipCssSpace(css, start, comments = false) {
 
 /** url( 的内容；无效 token 也一次跳过，禁止从每个字符重新回溯。 */
 function readCssUrl(css, start) {
-	let i = skipCssSpace(css, start, true);
+	let i = skipCssSpace(css, start);
 	if (css[i] === '"' || css[i] === "'") {
 		const str = readCssString(css, i);
 		i = skipCssSpace(css, str.end, true);
@@ -399,6 +399,22 @@ function readCssUrl(css, start) {
 	return { end: Math.min(i + 1, css.length), value: null };
 }
 
+// 判断标识符按码元扫描；只有真的需要比较名称时才切片或解码。
+function readCssNameEnd(source, i) {
+	while (i < source.length) {
+		const c = source.charCodeAt(i);
+		if ((c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c === 45 || c === 95 || c >= 0x80) i++;
+		else if (isValidCssEscape(source, i)) i = cssEscapeEnd(source, i);
+		else break;
+	}
+	return i;
+}
+
+function cssName(source, start, end) {
+	const raw = source.slice(start, end);
+	return (raw.includes('\\') ? decodeCssEscapes(raw) : raw).toLowerCase();
+}
+
 /**
  * 线性扫描 CSS URL token 与 @import 字符串，不匹配注释/普通字符串。
  * 这不是完整 CSS AST：仅改写 URL 载荷，其余源码（包括 media/layer 条件）保持原样。
@@ -412,9 +428,6 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 	let parenDepth = 0;
 	const imageSetDepths = [];
 	let expectImageSetOption = false;
-	// 热路径：按码元判断标识符字符，避免对每个字符执行一次正则（越界时 NaN 自然为 false）。
-	const isNameCode = c => (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) ||
-		c === 45 || c === 95 || c >= 0x80;
 	const replace = (start, end, value, wrapUrl = false) => {
 		if (value === null || !value) return;
 		const rewritten = rewriteUrl(value, baseUrl, workerOrigin);
@@ -463,17 +476,10 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 		const start = i;
 		const prefix = source[i] === '@' || source[i] === '#' ? source[i++] : '';
 		const nameStart = i;
-		let escaped = false;
-		for (;;) {
-			if (isNameCode(source.charCodeAt(i))) i++;
-			else if (isValidCssEscape(source, i)) { escaped = true; i = cssEscapeEnd(source, i); }
-			else break;
-		}
+		i = readCssNameEnd(source, i);
 		if (i === nameStart) { i = Math.max(i, start + 1); continue; }
-		// 只有 at 规则名和函数名需要识别；其余标识符不必切片、解码、转小写。
 		if (prefix !== '@' && source[i] !== '(') continue;
-		const raw = source.slice(nameStart, i);
-		const name = (escaped ? decodeCssEscapes(raw) : raw).toLowerCase();
+		const name = cssName(source, nameStart, i);
 		if (prefix === '@' && name === 'import') {
 			const valueStart = skipCssSpace(source, i, true);
 			if (source[valueStart] === '"' || source[valueStart] === "'") {
@@ -486,9 +492,12 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 			while (i < source.length && source[i] !== ';' && source[i] !== '{' && source[i] !== '}') {
 				if (source[i] === '"' || source[i] === "'") i = readCssString(source, i).end;
 				else if (source.startsWith('/*', i)) i = skipCssSpace(source, i, true);
-				// 未加引号的 url() 内 ; 与 /* 都是 URL 的一部分，必须整体吞掉，否则前导会提前结束或被当成注释。
-				else if (/^url\(/i.test(source.slice(i, i + 4)) && !isNameCode(source.charCodeAt(i - 1))) i = readCssUrl(source, i + 4).end;
-				else i++;
+				else {
+					const end = readCssNameEnd(source, i);
+					// 包括转义拼写的 url()，其中的分号或 /* 不能当成前导结束。
+					if (end > i && source[end] === '(' && cssName(source, i, end) === 'url') i = readCssUrl(source, end + 1).end;
+					else i = Math.max(end, i + 1);
+				}
 			}
 		} else if (!prefix && name === 'url' && source[i] === '(') {
 			const url = readCssUrl(source, i + 1);
@@ -2067,7 +2076,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 				} else if (attr === 'background') {
 					if (BG_TAGS.has(tag)) next = rw(v);
 				} else if (isSvgUrl) {
-					if (/(?:url|-webkit-image-set|image-set)\s*\(/i.test(v)) next = rewriteStyleAttr(v, baseHref, workerOrigin);
+					next = rewriteStyleAttr(v, baseHref, workerOrigin);
 				} else {
 					next = rewriteLazyValue(attr, v, baseHref, workerOrigin);
 				}

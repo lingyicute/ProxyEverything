@@ -190,3 +190,11 @@ test('WebSocket forwards only an HTTP(S) source established by the referring pag
 	await send(target, { headers: { upgrade: 'websocket' } });
 	assert.equal(forwarded.headers.get('origin'), null);
 });
+
+test('CSS recognizes escaped url functions in namespace declarations', () => {
+	const namespace = String.raw`@namespace svg \75 rl(https://example.com/path;@import "literal.css");`;
+	assert.equal(rewriteCss(namespace + 'a{background:url(pic.png)}', base, origin),
+		namespace + `a{background:url("${proxy('pic.png')}")}`);
+	const invalid = 'a{background:url(/*not syntax here*/"pic.png")}';
+	assert.equal(rewriteCss(invalid, base, origin), invalid);
+});

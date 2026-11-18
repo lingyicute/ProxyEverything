@@ -104,3 +104,11 @@ test('XHTML style uses XML escaping while ordinary HTML uses raw text', () => {
 	xhtml.text({ text: input, lastInTextNode: true, replace(value) { out = value; } });
 	assert.equal(out, `a{background:url("${proxy('/dir/pic.png?a=1&amp;b=2')}")}`);
 });
+
+test('SVG presentation attributes in HTML recognize escaped CSS url functions', () => {
+	const handlers = collectHandlers();
+	const path = element('path', { fill: String.raw`\75 rl(pattern.svg#paint)` });
+	path.before = () => {};
+	handlers['*'][0].element(path);
+	assert.equal(path.getAttribute('fill'), `url(&quot;${proxy('/dir/pattern.svg#paint')}&quot;)`);
+});
