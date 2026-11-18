@@ -13,7 +13,7 @@ const origin = 'https://proxy.example';
 const proxy = path => origin + '/' + encodeURIComponent('https://example.com') + path;
 
 /** 只提供 shim 安装钩子所需的最小浏览器环境；shim 内部异常记入 errors。 */
-function createBrowser() {
+function createBrowser(globals = {}) {
 	class Element {
 		constructor(tag) {
 			this.localName = tag.toLowerCase();
@@ -45,6 +45,7 @@ function createBrowser() {
 			querySelectorAll() { return []; },
 		},
 	};
+	Object.assign(ctx, globals);
 	ctx.window = ctx;
 	vm.createContext(ctx);
 	const code = getShimScript(origin, '').replace(/^<script>/, '').replace(/<\/script>$/, '');
@@ -129,4 +130,28 @@ test('shim: an empty action keeps the current document even when a base is prese
 	assert.equal(form.getAttribute('action'), '');
 	assert.equal(button.getAttribute('formaction'), '');
 	assert.equal(link.getAttribute('href'), proxy('/other/#heading'));
+});
+
+test('shim: Request retains native cloning, validation and subclass behavior', async () => {
+	const calls = [];
+	const { ctx } = createBrowser({ Request, fetch: async (...args) => { calls.push(args); } });
+	const input = new Request(proxy('/submit'), { method: 'POST', body: 'sample' });
+	const clone = new ctx.Request(input);
+	assert.notEqual(clone, input);
+	assert.equal(await clone.text(), 'sample');
+	assert.equal(input.bodyUsed, true);
+	const Subclass = class extends ctx.Request {};
+	assert.ok(new Subclass(new Request('https://example.com/asset')) instanceof Subclass);
+	assert.throws(() => new ctx.Request('/bad', { method: 'GET', body: 'invalid' }), TypeError);
+
+	const options = Object.create({ credentials: 'omit' });
+	Object.defineProperty(options, 'integrity', { value: 'sha256-marker' });
+	Object.freeze(options);
+	const request = new ctx.Request('/asset', options);
+	assert.equal(request.url, proxy('/asset'));
+	assert.equal(request.credentials, 'omit');
+	assert.equal(request.integrity, '');
+	assert.equal(new ctx.Request('data:,plain', options).integrity, 'sha256-marker');
+	await ctx.fetch({ url: '/unrelated-field', toString: () => '/actual' });
+	assert.equal(calls[0][0], proxy('/actual'));
 });

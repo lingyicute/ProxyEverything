@@ -998,69 +998,56 @@ function rpBase(a){
   if(typeof a==='string'&&!a.trim())return rp(base());
   return rwUrlArg(a);
 }
-function rwInit(init){
-  if(!init||typeof init!=='object')return init;
-  var out=null;
-  var ref=init.referrer;
-  var refStr=ref instanceof URL?ref.href:typeof ref==='string'?ref:'';
-  if(refStr&&refStr!=='about:client'){
-    var nr=rp(refStr);
-    if(nr&&nr!==ref)out=Object.assign({},init,{referrer:nr});
-  }
-  if(init.integrity){
-    out=out||Object.assign({},init);
-    out.integrity='';
-  }
-  return out||init;
+function isProxyRequestUrl(value){
+  try{var u=new URL(value,WO);return u.origin===WO&&PROXY_RE.test(u.pathname);}catch(e){return false;}
+}
+function rwInit(init,stripIntegrity){
+  if(init!=null&&typeof init!=='object'&&typeof init!=='function')return init;
+  var ref=init?.referrer;
+  var next=ref!==undefined&&ref!==null&&ref!==''&&ref!=='about:client'?rp(String(ref)):ref;
+  if(next===ref&&!stripIntegrity)return init;
+  // Fetch reads RequestInit as a dictionary, including inherited and non-enumerable
+  // properties. Do not copy it with Object.assign or mutate the caller's object.
+  return new Proxy(Object.create(null),{get:function(_,key){
+    if(key==='integrity'&&stripIntegrity)return '';
+    if(key==='referrer'&&next!==ref)return next;
+    return init?.[key];
+  }});
 }
 window.__PE__={get target(){return currentTarget();},rp:rp};
-/* Request 必须在浏览器把相对地址解析到代理域之前改写；流式/POST Request 重建时需声明 duplex: 'half'，
-   且 ReadableStream 正文在 Fetch 规范下不允许与 keepalive: true 或 mode: 'no-cors' 并存。 */
 var oRequest=window.Request;
-function buildReq(u,r){
-  var m=r.method||'GET';
-  var mUp=String(m).toUpperCase();
-  var b=mUp!=='GET'&&mUp!=='HEAD'?r.body:undefined;
-  var md=r.mode==='navigate'||(b&&r.mode==='no-cors')?'same-origin':r.mode;
-  var ref=r.referrer;
-  if(typeof ref==='string'&&ref&&ref!=='about:client')ref=rp(ref);
-  return new oRequest(u,{
-    method:m,headers:r.headers,
-    body:b,
-    mode:md,
-    credentials:r.credentials,cache:r.cache,redirect:r.redirect,
-    referrer:ref,referrerPolicy:r.referrerPolicy,
-    integrity:'',keepalive:b?false:r.keepalive,signal:r.signal,
-    duplex:'half'
-  });
+var getRequestUrl=oRequest&&Object.getOwnPropertyDescriptor(oRequest.prototype,'url')?.get;
+function nativeRequestUrl(input){
+  if(!oRequest||!input||typeof input!=='object')return null;
+  if(getRequestUrl){try{return getRequestUrl.call(input);}catch(e){return null;}}
+  return input instanceof oRequest?input.url:null;
 }
-function mergeReq(input,init){
-  if(init===undefined)return input;
-  try{return new oRequest(input,init);}catch(e){
-    var merged={};
-    ['method','headers','body','mode','credentials','cache','redirect','referrer','referrerPolicy','integrity','keepalive','signal'].forEach(function(k){
-      merged[k]=init[k]!==undefined?init[k]:input[k];
-    });
-    return buildReq(input.url,merged);
+function requestArgs(input,init){
+  var original=nativeRequestUrl(input);
+  if(original===null){
+    var value=input==null||typeof input==='symbol'?input:rpBase(String(input));
+    return [value,rwInit(init,Boolean(init?.integrity&&isProxyRequestUrl(value)))];
   }
-}
-function rwReq(input,init){
-  init=rwInit(init);
-  var nu=rp(input.url);
-  if((!nu||nu===input.url)&&!input.integrity)return mergeReq(input,init);
-  var r=mergeReq(input,init);
-  return buildReq(nu||input.url,r);
+  var url=rp(original);
+  init=rwInit(init,Boolean((input.integrity||init?.integrity)&&isProxyRequestUrl(url)));
+  if(!url||url===original)return [input,init];
+  var r=init===undefined?input:new oRequest(input,init);
+  var method=r.method||'GET';
+  var body=method==='GET'||method==='HEAD'?undefined:(r.body??undefined);
+  // A stream with keepalive or no-cors is not representable as a new native Request.
+  // Let the native API report that rather than silently changing either option.
+  return [url,{
+    method:method,headers:r.headers,body:body,
+    mode:r.mode,credentials:r.credentials,cache:r.cache,redirect:r.redirect,
+    referrer:r.referrer==='about:client'?r.referrer:rp(r.referrer),referrerPolicy:r.referrerPolicy,
+    integrity:isProxyRequestUrl(url)?'':r.integrity,keepalive:r.keepalive,signal:r.signal,
+    duplex:body?'half':undefined
+  }];
 }
 if(oRequest){
   var ProxyRequest=function(input,init){
     if(!new.target)throw new TypeError('Request requires new');
-    init=rwInit(init);
-    if(input&&typeof input==='object'&&'url'in input)return rwReq(input,init);
-    input=rpBase(input);
-    try{return Reflect.construct(oRequest,[input,init],new.target);}catch(e){
-      if(init&&typeof init==='object')return buildReq(input instanceof URL?input.href:input,init);
-      throw e;
-    }
+    return Reflect.construct(oRequest,arguments.length?requestArgs(input,init):[],new.target);
   };
   ProxyRequest.prototype=oRequest.prototype;
   Object.setPrototypeOf(ProxyRequest,oRequest);
@@ -1069,13 +1056,9 @@ if(oRequest){
 /* ---- fetch ---- */
 var of_=window.fetch;
 if(of_)window.fetch=function(input,init){
-  try{
-    init=rwInit(init);
-    if(typeof input==='string')input=rpBase(input);
-    else if(input instanceof URL)input=rp(input.href);
-    else if(input&&typeof input==='object'&&'url'in input&&oRequest){input=rwReq(input,init);init=undefined;}
-  }catch(e){}
-  return of_.call(this,input,init);
+  if(!arguments.length)return of_.call(this);
+  try{return of_.apply(this,requestArgs(input,init));}
+  catch(e){return Promise.reject(e);}
 };
 /* ---- XMLHttpRequest ---- */
 var oOpen=XMLHttpRequest.prototype.open;
