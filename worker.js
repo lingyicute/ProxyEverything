@@ -1013,7 +1013,8 @@ function applyCachePolicy(response, request, ck) {
 	if (response.status >= 500 || response.headers.has('set-cookie') ||
 		(request && (!isCacheableMethod(request.method) || hasCookie ||
 		request.headers.has('authorization')))) {
-		response.headers.set('Cache-Control', 'no-store');
+		const policy = hasNoTransform(response.headers.get('Cache-Control')) ? 'no-store, no-transform' : 'no-store';
+		response.headers.set('Cache-Control', policy);
 		response.headers.delete('cdn-cache-control');
 		response.headers.delete('cloudflare-cdn-cache-control');
 		response.headers.delete('surrogate-control');

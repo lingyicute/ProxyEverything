@@ -237,3 +237,11 @@ test('redirect status without a Location keeps the explanatory representation', 
 	assert.equal(r.status, 302);
 	assert.equal(await r.text(), 'Choose a new address.');
 });
+
+test('hardening a personalized response preserves the upstream no-transform directive', async () => {
+	const r = await fetchThrough('https://example.com/style.css', {
+		'content-type': 'text/css', 'cache-control': 'private, no-transform',
+	}, '@import "tile.css";', { authorization: 'Bearer fixture' });
+	assert.equal(r.headers.get('cache-control'), 'no-store, no-transform');
+	assert.equal(await r.text(), '@import "tile.css";');
+});
