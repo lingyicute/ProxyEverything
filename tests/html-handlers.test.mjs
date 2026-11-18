@@ -112,3 +112,9 @@ test('SVG presentation attributes in HTML recognize escaped CSS url functions', 
 	handlers['*'][0].element(path);
 	assert.equal(path.getAttribute('fill'), `url(&quot;${proxy('/dir/pattern.svg#paint')}&quot;)`);
 });
+
+test('srcset preserves internal commas, data URLs and candidate separators', () => {
+	const image = element('img', { srcset: 'first,a.png 1x, data:image/gif;base64,token 2x, last.png,, ' });
+	collectHandlers().img[0].element(image);
+	assert.equal(image.getAttribute('srcset'), `${proxy('/dir/first,a.png')} 1x, data:image/gif;base64,token 2x, ${proxy('/dir/last.png')},, `);
+});

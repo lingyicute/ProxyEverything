@@ -260,8 +260,7 @@ function isSrcsetSpace(ch) {
 	return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f';
 }
 
-function rewriteSrcset(value, baseUrl, workerOrigin) {
-	const s = String(value);
+function mapSrcset(s, rewrite) {
 	const n = s.length;
 	let out = '';
 	let i = 0;
@@ -275,16 +274,10 @@ function rewriteSrcset(value, baseUrl, workerOrigin) {
 		// 2/3. URL 段
 		const urlStart = i;
 		while (i < n && !isSrcsetSpace(s[i])) i++;
-		let url = s.slice(urlStart, i);
-		let trailing = '';
-		const m = /,+$/.exec(url);
-		if (m) {
-			trailing = m[0];
-			url = url.slice(0, url.length - trailing.length);
-		}
-		if (url) out += rewriteUrl(url, baseUrl, workerOrigin);
-		out += trailing;
-		if (trailing) continue; // 该候选项没有描述符，直接进入下一轮
+		let end = i;
+		while (end > urlStart && s[end - 1] === ',') end--;
+		out += rewrite(s.slice(urlStart, end)) + s.slice(end, i);
+		if (end < i) continue; // 该候选项没有描述符，直接进入下一轮
 
 		// 4. 描述符段（括号内的逗号不算分隔符，兼容未来的描述符语法）
 		const descStart = i;
@@ -299,6 +292,10 @@ function rewriteSrcset(value, baseUrl, workerOrigin) {
 		out += s.slice(descStart, i);
 	}
 	return out;
+}
+
+function rewriteSrcset(value, baseUrl, workerOrigin) {
+	return mapSrcset(String(value), url => rewriteUrl(url, baseUrl, workerOrigin));
 }
 
 /** CSS 字符串不能直接沿用源引号：解析相对地址后可能从基地址继承 ' 或括号，并转义 <、> 防逸出。 */
@@ -1172,37 +1169,10 @@ function patchSetter(ctor,prop,ss){
     });
   }catch(e){}
 }
-/* 与服务端 rewriteSrcset 同一套规则：URL 内部允许出现逗号
-   （data:image/gif;base64,......），因此不能简单按 "," 切分 */
-function rwsIsW(c){return c===' '||c==='\\t'||c==='\\n'||c==='\\r'||c==='\\f';}
-function rwSrcset(v){
-  if(typeof v!=='string')return v;
-  var s=v,n=s.length,out='',i=0,c,tr,m,url,ss,us,ds,d;
-  while(i<n){
-    ss=i;
-    while(i<n&&(rwsIsW(s.charAt(i))||s.charAt(i)===','))i++;
-    out+=s.substring(ss,i);
-    if(i>=n)break;
-    us=i;
-    while(i<n&&!rwsIsW(s.charAt(i)))i++;
-    url=s.substring(us,i);tr='';
-    m=/,+$/.exec(url);
-    if(m){tr=m[0];url=url.substring(0,url.length-tr.length);}
-    if(url)out+=rp(url);
-    out+=tr;
-    if(tr)continue;
-    ds=i;d=0;
-    while(i<n){
-      c=s.charAt(i);
-      if(c==='(')d++;
-      else if(c===')'){if(d>0)d--;}
-      else if(c===','&&d===0)break;
-      i++;
-    }
-    out+=s.substring(ds,i);
-  }
-  return out;
-}
+/* 与服务端共享同一解析器，保留候选 URL 内部的逗号。 */
+${isSrcsetSpace.toString()}
+${mapSrcset.toString()}
+function rwSrcset(v){return typeof v==='string'?mapSrcset(v,rp):v;}
 var I=window.HTMLImageElement;
 patchSetter(I,'src');patchSetter(I,'srcset',1);
 patchSetter(window.HTMLScriptElement,'src');

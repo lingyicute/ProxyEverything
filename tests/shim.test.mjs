@@ -155,3 +155,10 @@ test('shim: Request retains native cloning, validation and subclass behavior', a
 	await ctx.fetch({ url: '/unrelated-field', toString: () => '/actual' });
 	assert.equal(calls[0][0], proxy('/actual'));
 });
+
+test('shim srcset uses the same URL boundaries and leaves data candidates alone', () => {
+	const { ctx } = createBrowser();
+	const image = new ctx.Element('img');
+	image.setAttribute('srcset', 'first,a.png 1x, data:image/gif;base64,token 2x, last.png,, ');
+	assert.equal(image.getAttribute('srcset'), `${proxy('/dir/first,a.png')} 1x, data:image/gif;base64,token 2x, ${proxy('/dir/last.png')},, `);
+});
