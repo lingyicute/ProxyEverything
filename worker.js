@@ -55,8 +55,8 @@ const STRIP_RESPONSE_HEADERS = [
 ];
 
 // 仅正文变换时移除；透传响应必须保留其表示元数据。
-const TRANSFORMED_HEADERS = [
-	'content-encoding', 'content-length', 'etag', 'last-modified',
+const REPRESENTATION_HEADERS = [
+	'content-length', 'etag', 'last-modified',
 	'content-md5', 'digest', 'content-digest', 'repr-digest',
 	'content-range', 'accept-ranges',
 ];
@@ -104,7 +104,8 @@ function stripResponseHeaders(headers, request, baseUrl) {
 }
 
 function stripTransformedHeaders(headers) {
-	for (const name of TRANSFORMED_HEADERS) headers.delete(name);
+	headers.delete('Content-Encoding');
+	for (const name of REPRESENTATION_HEADERS) headers.delete(name);
 }
 
 // 常见懒加载 data-* 属性（按需扩充）
@@ -788,7 +789,13 @@ function isJsonMime(mime) {
 	return mime === 'application/json' || mime === 'text/json' || mime.endsWith('+json');
 }
 
+function contentCoding(headers) {
+	return headers.get('Content-Encoding')?.trim().toLowerCase() || 'identity';
+}
+
 function transformKind(headers, request) {
+	// Workerd 解码 HTTP 回源的 gzip/br；其它编码不假定能解开。
+	if (!['identity', 'gzip', 'br'].includes(contentCoding(headers))) return null;
 	if (/^\s*attachment\s*(?:;|$)/i.test(headers.get('Content-Disposition') || '') ||
 		/(?:^|,)\s*no-transform\s*(?:,|$)/i.test(headers.get('Cache-Control') || '')) return null;
 	const mime = mimeType(headers.get('Content-Type'));
@@ -1715,6 +1722,9 @@ async function transformText(response, baseUrl, workerOrigin, kind, request, dec
 		stripTransformedHeaders(resp.headers);
 		const ct = (response.headers.get('content-type') || '').split(';')[0].trim();
 		resp.headers.set('content-type', (ct || 'text/plain') + '; charset=UTF-8');
+	} else if (contentCoding(response.headers) !== 'identity') {
+		// 已读取的是解压后的流；重新压缩不保证得到同样的上游字节。
+		for (const name of REPRESENTATION_HEADERS) resp.headers.delete(name);
 	}
 	if (ENABLE_PROXY_NOINDEX) {
 		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
@@ -2302,6 +2312,8 @@ Disallow: /wss%3A
 		const fetchUrl = targetUrl.href;
 
 		const fwdHeaders = buildUpstreamHeaders(request, workerOrigin, targetUrl, env);
+		// 交由 Workers 协商编码，而不是转发运行时未必能解码的客户端编码。
+		fwdHeaders.delete('Accept-Encoding');
 		// Cookie 按站点隔离：只回传属于当前目标站点的那部分，并剥掉命名空间前缀
 		applyRequestCookieScope(fwdHeaders, request, ck.ns);
 		// 记录是否真的带 Cookie 回源，供缓存策略判断

@@ -7,7 +7,7 @@ const { default: worker } = await import('data:text/javascript;base64,' + Buffer
 const origin = 'https://proxy.example';
 const limit = 2 * 1024 * 1024;
 
-function upstreamResponse(bytes, contentType) {
+function upstreamResponse(bytes, contentType, encoding = 'identity') {
 	const boundaries = [0, 3, 81_919, 1_019_039, bytes.length];
 	let next = 0;
 	const body = new ReadableStream({
@@ -19,16 +19,16 @@ function upstreamResponse(bytes, contentType) {
 	return new Response(body, { headers: {
 		'Content-Type': contentType,
 		'Content-Length': String(bytes.length),
-		'Content-Encoding': 'identity',
+		'Content-Encoding': encoding,
 		ETag: '"source-v1"',
 		'Last-Modified': 'Wed, 01 Jan 2025 00:00:00 GMT',
 		'Cache-Control': 'public, max-age=3600',
 	} });
 }
 
-async function proxyResponse(bytes, contentType, path) {
+async function proxyResponse(bytes, contentType, path, encoding) {
 	const originalFetch = globalThis.fetch;
-	globalThis.fetch = async () => upstreamResponse(bytes, contentType);
+	globalThis.fetch = async () => upstreamResponse(bytes, contentType, encoding);
 	try {
 		return await worker.fetch(new Request(origin + '/' + encodeURIComponent('https://site.example') + path), {
 			ALLOWED_TARGET_ORIGINS: 'https://site.example',
@@ -83,4 +83,15 @@ test('small CSS is still decoded, rewritten and marked as a new representation',
 	const text = await response.text();
 	assert.ok(text.includes('content:"é"'));
 	assert.ok(text.includes('url("' + origin + '/https%3A%2F%2Fsite.example/assets/logo.png")'));
+});
+
+test('oversized decoded HTTP streams do not re-use the original encoded validators', async () => {
+	const bytes = Buffer.alloc(limit + 57, 0x20);
+	const type = 'text/css; charset=windows-1252';
+	// In Workerd the HTTP stream is decoded when read, but still carries the wire headers.
+	const response = await proxyResponse(bytes, type, '/assets/large.css', 'gzip');
+	assert.equal(response.headers.get('content-type'), type);
+	assert.equal(response.headers.get('content-encoding'), 'gzip');
+	for (const header of ['content-length', 'etag', 'last-modified']) assert.equal(response.headers.get(header), null);
+	assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
 });
