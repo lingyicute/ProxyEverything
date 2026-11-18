@@ -117,3 +117,20 @@ test('HTTP upstreams do not turn secure cookies into ordinary cookies', async ()
 	assert.equal(values.length, 1);
 	assert.match(values[0], /_plain=4; Path=\//);
 });
+
+test('streaming HTML uses the same downstream CORS policy as other media', async t => {
+	const previous = globalThis.HTMLRewriter;
+	globalThis.HTMLRewriter = class { on() { return this; } transform(r) { return r; } };
+	t.after(() => { if (previous) globalThis.HTMLRewriter = previous; else delete globalThis.HTMLRewriter; });
+	for (const headers of [{}, { origin }]) {
+		const r = await fetchThrough('https://example.com/page', {
+			'content-type': 'text/html', 'access-control-allow-origin': '*',
+			'access-control-expose-headers': 'X-Fixture', vary: 'Sec-Fetch-Site',
+		}, '<p>fixture</p>', headers);
+		assert.equal(r.status, 200);
+		assert.equal(r.headers.get('access-control-allow-origin'), headers.origin ?? null);
+		assert.equal(r.headers.get('access-control-expose-headers'), null);
+		assert.match(r.headers.get('vary'), /\bReferer\b/i);
+		await r.text();
+	}
+});

@@ -10,7 +10,7 @@ export default {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === '/html') {
-      const headers = new Headers({ 'Content-Type': 'text/html' });
+      const headers = new Headers({ 'Content-Type': 'text/html', 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Fixture', Vary: 'Sec-Fetch-Site' });
       headers.append('Set-Cookie', 'first=one; HttpOnly');
       headers.append('Set-Cookie', 'second=two; Secure');
       return new Response('<!doctype html><head><base href="/assets/"></head><body><img src="a&#47;b.png?x=1&amp;y=2"><form action=""></form></body>', { headers });
@@ -56,6 +56,10 @@ test('real Workerd: HTML, compressed HTTP, URL encoding and WebSocket', {
 
 	const page = await runtime.dispatchFetch(proxy + '/html');
 	assert.equal(page.status, 200);
+	assert.equal(page.headers.get('Access-Control-Allow-Origin'), null);
+	assert.equal(page.headers.get('Access-Control-Expose-Headers'), null);
+	assert.match(page.headers.get('Vary'), /\bOrigin\b/i);
+	assert.match(page.headers.get('Vary'), /\bReferer\b/i);
 	const html = await page.text();
 	assert.ok(html.includes('src="' + proxy + '/assets/a/b.png?x=1&amp;y=2"'));
 	assert.match(html, /<form action="">/);

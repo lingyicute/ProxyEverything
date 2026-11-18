@@ -941,15 +941,7 @@ function transformKind(headers, request) {
 function buildResponse(upstream, request, ck, baseUrl) {
 	const resp = new Response(upstream.body, upstream);
 	stripResponseHeaders(resp.headers, request, baseUrl);
-	stripHopByHop(resp.headers);
-	if (ENABLE_PROXY_NOINDEX) {
-		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
-	}
-	applyCors(resp.headers, request);
-	// Set-Cookie 添加来源命名空间，避免回源时意外混用
-	applyCachePolicy(resp, request, ck);
-	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
-	return resp;
+	return applyCommon(resp, request, ck);
 }
 
 function isCacheableMethod(m) { return m === 'GET' || m === 'HEAD'; }
@@ -2205,10 +2197,6 @@ async function transformText(response, baseUrl, workerOrigin, kind, request, dec
 		// 已读取的是解压后的流；重新压缩不保证得到同样的上游字节。
 		for (const name of REPRESENTATION_HEADERS) resp.headers.delete(name);
 	}
-	if (ENABLE_PROXY_NOINDEX) {
-		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
-	}
-	applyCors(resp.headers, request);
 	return resp;
 }
 
@@ -2910,12 +2898,13 @@ Disallow: /
 	},
 };
 
-/** transformText 的产物再补一遍统一头处理 */
+/** 所有回源 HTTP 响应（含流式 HTML）共用相同的下游策略。 */
 function applyCommon(resp, request, ck) {
 	stripHopByHop(resp.headers);
 	if (ENABLE_PROXY_NOINDEX) {
 		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
 	}
+	applyCors(resp.headers, request);
 	applyCachePolicy(resp, request, ck);
 	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
 	return resp;
