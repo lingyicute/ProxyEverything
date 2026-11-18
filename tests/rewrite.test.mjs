@@ -80,7 +80,7 @@ test('svg: attribute-like text inside quoted values is left alone', () => {
 // Call the fetch handler directly; the upstream is a stub that records the forwarded request.
 let forwarded = null;
 globalThis.fetch = async (url, init) => {
-	forwarded = { url: String(url), headers: new Headers(init.headers) };
+	forwarded = { url: String(url), headers: new Headers(init.headers), cache: init.cache };
 	return new Response('PNG', { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=3600' } });
 };
 const send = (url, { method = 'GET', headers = {} } = {}) => {
@@ -132,8 +132,15 @@ test('cache policy: only cookies forwarded to the target disable caching', async
 	let response = await send(target, { headers: { cookie: 'unrelated=1; __pe_x_other_=1' } });
 	assert.equal(forwarded.headers.get('cookie'), null);
 	assert.equal(response.headers.get('cache-control'), 'public, max-age=3600');
+	assert.equal(forwarded.cache, undefined);
+	assert.match(response.headers.get('vary'), /\bCookie\b/i);
+	assert.match(response.headers.get('vary'), /\bAuthorization\b/i);
 	response = await send(target, { headers: { cookie: ns + 'sid=1' } });
 	assert.equal(forwarded.headers.get('cookie'), 'sid=1');
+	assert.equal(forwarded.cache, 'no-store');
+	assert.equal(response.headers.get('cache-control'), 'no-store');
+	response = await send(target, { headers: { authorization: 'Bearer test-marker' } });
+	assert.equal(forwarded.cache, 'no-store');
 	assert.equal(response.headers.get('cache-control'), 'no-store');
 });
 

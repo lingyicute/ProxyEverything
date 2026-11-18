@@ -791,8 +791,8 @@ function buildResponse(upstream, request, ck, baseUrl) {
 	}
 	applyCors(resp.headers, request);
 	// Set-Cookie 添加来源命名空间，避免回源时意外混用
-	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
 	applyCachePolicy(resp, request, ck);
+	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
 	return resp;
 }
 
@@ -804,6 +804,9 @@ function isCacheableMethod(m) { return m === 'GET' || m === 'HEAD'; }
  * 否则任一站点写入 Cookie 后，其它目标（含无 Cookie 的静态 CDN）的响应也会全部变成 no-store。
  */
 function applyCachePolicy(response, request, ck) {
+	// 不把匿名缓存条目用于后来带凭证的请求；不能只在带凭证的响应上设置 no-store。
+	addVary(response.headers, 'Cookie');
+	addVary(response.headers, 'Authorization');
 	const hasCookie = Boolean(request) && (ck ? ck.hasCookie : request.headers.has('cookie'));
 	if (response.status >= 500 || response.headers.has('set-cookie') ||
 		(request && (!isCacheableMethod(request.method) || hasCookie ||
@@ -2289,6 +2292,8 @@ Disallow: /wss%3A
 				headers: fwdHeaders,
 				body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
 				redirect: 'manual',
+				// 响应的 no-store 无法阻止 fetch 先命中 Cloudflare 的上游缓存。
+				cache: ck.hasCookie || fwdHeaders.has('authorization') ? 'no-store' : undefined,
 			});
 		} catch (e) {
 			return errorPage(targetUrl.href, e);
@@ -2392,8 +2397,8 @@ Disallow: /wss%3A
 				result.headers.set('X-Robots-Tag', 'noindex, nofollow');
 			}
 			applyCors(result.headers, request);
-			rescopeSetCookies(result.headers, ck.ns, ck.isHttps);
 			applyCachePolicy(result, request, ck);
+			rescopeSetCookies(result.headers, ck.ns, ck.isHttps);
 			return result;
 		}
 
@@ -2432,11 +2437,11 @@ Disallow: /wss%3A
 /** transformText 的产物再补一遍统一头处理 */
 function applyCommon(resp, upstream, request, ck) {
 	stripHopByHop(resp.headers);
-	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
 	if (ENABLE_PROXY_NOINDEX) {
 		resp.headers.set('X-Robots-Tag', 'noindex, nofollow');
 	}
 	applyCachePolicy(resp, request, ck);
+	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
 	return resp;
 }
 
