@@ -236,3 +236,10 @@ test('bare target paths vary on the Referer that selects the route', async () =>
 	assert.equal(missing.status, 404);
 	assert.equal(missing.headers.get('cache-control'), 'no-store');
 });
+
+test('a non-GET upgrade is rejected instead of becoming an upstream GET', async () => {
+	const r = await send(proxy('https://example.com/socket'), { method: 'POST', headers: { upgrade: 'websocket' } });
+	assert.equal(r.status, 405);
+	assert.equal(r.headers.get('allow'), 'GET');
+	assert.equal(forwarded, null);
+});

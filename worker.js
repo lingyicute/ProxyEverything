@@ -2856,6 +2856,9 @@ Disallow: /
 
 		// WebSocket 请求走独立通道
 		if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
+			if (request.method !== 'GET') return new Response('WebSocket 握手需要 GET', {
+				status: 405, headers: { Allow: 'GET', 'Cache-Control': 'no-store' },
+			});
 			try {
 				return await handleWebSocket(request, targetUrl, ck, workerOrigin, env);
 			} catch (e) {
