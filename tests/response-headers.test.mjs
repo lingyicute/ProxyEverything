@@ -88,3 +88,12 @@ test('Set-Cookie fields retain separate values and commas within Expires', async
 	assert.match(values[1], /_second=two; HttpOnly/);
 	assert.equal(response.headers.get('Cache-Control'), 'no-store');
 });
+
+test('upstream source variants retain Referer in the downstream cache key', async () => {
+	const response = await fetchThrough('https://example.com/asset', {
+		'content-type': 'text/plain', vary: 'Origin, Sec-Fetch-Site, Accept-Language',
+	});
+	for (const field of ['origin', 'sec-fetch-site', 'accept-language', 'referer']) {
+		assert.ok(response.headers.get('vary').toLowerCase().split(/,\s*/).includes(field));
+	}
+});

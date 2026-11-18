@@ -889,6 +889,9 @@ function applyCors(headers, request) {
 	for (const name of [...headers.keys()]) {
 		if (name.toLowerCase().startsWith('access-control-')) headers.delete(name);
 	}
+	// 上游看到的 Origin / Sec-Fetch-Site 还取决于 Referer，仅按代理请求的同名头分桶不够。
+	const upstreamVary = headers.get('Vary') || '';
+	if (upstreamVary.split(',').some(field => /^(?:origin|sec-fetch-site)$/i.test(field.trim()))) addVary(headers, 'Referer');
 	addVary(headers, 'Origin');
 	const origin = request && request.headers.get('origin');
 	if (!origin || origin !== new URL(request.url).origin) return headers;
