@@ -192,3 +192,14 @@ test('namespaced metadata is not mistaken for a native loading attribute', () =>
 	link.setAttributeNS('http://www.w3.org/1999/xlink', 'ref:href', 'sprite.svg');
 	assert.equal(link.getAttribute('ref:href'), proxy('/dir/sprite.svg'));
 });
+
+test('history updates cannot switch the document to a different target origin', () => {
+	const calls = [];
+	const save = (...args) => calls.push(args[2]);
+	const { ctx } = createBrowser({ DOMException, history: { pushState: save, replaceState: save } });
+	for (const method of ['pushState', 'replaceState']) {
+		ctx.history[method](null, '', './next');
+		assert.throws(() => ctx.history[method](null, '', 'https://other.example/'), { name: 'SecurityError' });
+	}
+	assert.deepEqual(calls, [proxy('/dir/next'), proxy('/dir/next')]);
+});

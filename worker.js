@@ -1213,7 +1213,18 @@ if(window.WebSocket){
   window.WebSocket=WS;
 }
 /* ---- history / window.open / location.assign ---- */
-function wrapHistory(fn){return function(st,t,u){try{if(u!=null)arguments[2]=rp(u);}catch(e){}return fn.apply(this,arguments);};}
+function wrapHistory(fn){return function(st,t,u){
+  if(u!=null&&u!==''){
+    var next=rwNavigation(String(u),true);
+    var link=new URL(next,location.href);
+    if(isSelfHost(link)&&isProxiedPath(link.pathname)){
+      var dest=new URL(decodeProxyPath(link.pathname));
+      if(dest.origin!==new URL(currentTarget()).origin)throw new DOMException('History URL has a different target origin','SecurityError');
+    }
+    arguments[2]=next;
+  }
+  return fn.apply(this,arguments);
+};}
 if(history.pushState)history.pushState=wrapHistory(history.pushState);
 if(history.replaceState)history.replaceState=wrapHistory(history.replaceState);
 var oWo=window.open;
