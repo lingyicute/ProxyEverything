@@ -670,26 +670,103 @@ function isUtf8Charset(cs) {
 /** 校验并规范化编码标签；不受 TextDecoder 支持的非法标签返回 null */
 function normalizeCharsetLabel(label, fromMetaOrCss = false) {
 	if (!label) return null;
-	let cs = String(label).trim().toLowerCase();
+	const cs = String(label).trim().toLowerCase();
 	if (!cs) return null;
-	if (fromMetaOrCss) {
-		// HTML / CSS 规范：meta 或 @charset 声明的 UTF-16 视为 UTF-8，x-user-defined 视为 windows-1252。
-		if (/^utf-16(?:le|be)?$/.test(cs)) cs = 'utf-8';
-		else if (cs === 'x-user-defined') cs = 'windows-1252';
-	}
-	if (isUtf8Charset(cs)) return 'utf-8';
+	if (fromMetaOrCss && cs === 'x-user-defined') return 'windows-1252';
 	try {
-		new TextDecoder(cs);
-		return cs;
+		const encoding = new TextDecoder(cs).encoding;
+		return fromMetaOrCss && /^utf-16(?:le|be)$/.test(encoding) ? 'utf-8' : encoding;
 	} catch {
 		return null;
 	}
 }
 
-/** 从 Content-Type 中提取受支持的 charset 标签（非法标签忽略以便回退嗅探） */
-function getCharset(contentType) {
-	const m = /(?:^|;)\s*charset\s*=\s*(?:"\s*([\w\-:.]+)\s*"|'\s*([\w\-:.]+)\s*'|([\w\-:.]+)\s*(?=$|;))/i.exec(contentType || '');
-	return m ? normalizeCharsetLabel(m[1] || m[2] || m[3], false) : null;
+/** 参数名不能从另外一个参数的引号值里匹配。 */
+function getCharset(contentType, fromMeta = false) {
+	const param = /;[ \t]*([^;=\s]+)[ \t]*=[ \t]*(?:"((?:\\.|[^"\\])*)"|'([^']*)'|([^;]*))/g;
+	for (const [, name, double, single, bare] of (contentType || '').matchAll(param)) {
+		if (name.toLowerCase() === 'charset') {
+			return normalizeCharsetLabel(double?.replace(/\\(.)/g, '$1') ?? single ?? bare, fromMeta);
+		}
+	}
+	return null;
+}
+
+function scanHtmlPrescanAttrs(text, start, collect) {
+	let i = start;
+	const attrs = collect ? Object.create(null) : null;
+	while (i < text.length) {
+		while (isSrcsetSpace(text[i]) || text[i] === '/') i++;
+		if (text[i] === '>') return { end: i + 1, attrs };
+		const nameStart = i++;
+		while (i < text.length && !isSrcsetSpace(text[i]) && !'/=>'.includes(text[i])) i++;
+		const name = collect ? text.slice(nameStart, i).toLowerCase() : '';
+		while (isSrcsetSpace(text[i])) i++;
+		let value = '';
+		if (text[i] === '=') {
+			i++;
+			while (isSrcsetSpace(text[i])) i++;
+			const quote = text[i];
+			if (quote === '"' || quote === "'") {
+				const end = text.indexOf(quote, ++i);
+				if (end === -1) return null;
+				if (collect) value = text.slice(i, end);
+				i = end + 1;
+			} else {
+				const valueStart = i;
+				while (i < text.length && !isSrcsetSpace(text[i]) && text[i] !== '>') i++;
+				if (collect) value = text.slice(valueStart, i);
+			}
+		}
+		if (collect && !Object.hasOwn(attrs, name)) attrs[name] = value;
+	}
+	return null;
+}
+
+function prescanHtmlCharset(text) {
+	const tag = /<\/?([a-z][^\t\r\n\f />]*)/iy;
+	for (let start = 0; (start = text.indexOf('<', start)) !== -1;) {
+		if (text.startsWith('<!-->', start) || text.startsWith('<!--->', start)) {
+			start += text[start + 4] === '>' ? 5 : 6;
+			continue;
+		}
+		if (text.startsWith('<!--', start)) {
+			const end = /--!?>/g;
+			end.lastIndex = start + 4;
+			if (!end.exec(text)) return null;
+			start = end.lastIndex;
+			continue;
+		}
+		if (text[start + 1] === '!' || text[start + 1] === '?') {
+			const end = text.indexOf('>', start + 2);
+			if (end < 0) return null;
+			start = end + 1;
+			continue;
+		}
+		tag.lastIndex = start;
+		const match = tag.exec(text);
+		if (!match) { start++; continue; }
+		const meta = match[1].toLowerCase() === 'meta' && text[start + 1] !== '/';
+		const scanned = scanHtmlPrescanAttrs(text, tag.lastIndex, meta);
+		if (!scanned) return null;
+		start = scanned.end;
+		if (!meta) continue;
+		const attrs = scanned.attrs;
+		const encoding = Object.hasOwn(attrs, 'charset')
+			? normalizeCharsetLabel(attrs.charset, true)
+			: attrs['http-equiv']?.toLowerCase() === 'content-type' ? getCharset(attrs.content, true) : null;
+		if (encoding) return encoding;
+	}
+	return null;
+}
+
+function xmlDeclaredCharset(text) {
+	const m = /^<\?xml[ \t\r\n][^?]*\?>/.exec(text);
+	if (!m) return null;
+	for (const [, , name, , double, single] of m[0].matchAll(XML_ATTR)) {
+		if (name === 'encoding') return normalizeCharsetLabel(double ?? single);
+	}
+	return null;
 }
 
 /**
@@ -697,7 +774,7 @@ function getCharset(contentType) {
  * 一旦确定编码就停止嗅探，不必等到 4096 字节/EOF 才开始向浏览器输出。
  * tee 的另一支保留全部字节；只在固定大小的前缀缓冲中检查声明。
  */
-async function sniffHtmlCharset(body, declaredCharset = null) {
+async function sniffHtmlCharset(body, declaredCharset = null, isXml = false) {
 	if (!body) return { charset: declaredCharset, body };
 	const [a, b] = body.tee();
 	const reader = a.getReader();
@@ -716,32 +793,8 @@ async function sniffHtmlCharset(body, declaredCharset = null) {
 			if (total < 3) continue;
 			if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) { charset = 'utf-8'; break; }
 			if (declaredCharset) break;
-			// 剥除 HTML 注释（含 HTML5 短注释 <!--> / <!--->）后再扫描 meta，避免被注释掉的编码声明误导。
-			const text = new TextDecoder().decode(head.subarray(0, total)).replace(/<!--(?:>|->|[\s\S]*?(?:-->|$))/g, '');
-			const xml = /^\s*<\?xml\b[^>]{0,200}?\bencoding\s*=\s*(["'])\s*([a-z0-9_\-:.]+)\s*\1[^>]*\?>/i.exec(text);
-			if (xml) {
-				const valid = normalizeCharsetLabel(xml[2], false);
-				if (valid) { charset = valid; break; }
-			}
-			// 不把分片边界处尚未闭合的属性值当成完整编码名；仅采纳直接 charset 属性或 http-equiv=content-type 的 content。
-			for (const [, rawAttrs] of text.matchAll(/<meta\b((?:[^>"']|"[^"]*"|'[^']*'){0,500}?)\s*\/?>/gi)) {
-				const attrs = Object.create(null);
-				for (const [, k, dq, sq, uq] of rawAttrs.matchAll(/([a-z0-9_-]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+)))?/gi)) {
-					const name = k.toLowerCase();
-					if (!(name in attrs)) attrs[name] = dq ?? sq ?? uq ?? '';
-				}
-				if (attrs.charset) {
-					const valid = normalizeCharsetLabel(attrs.charset.replace(/\/+$/, ''), true);
-					if (valid) { charset = valid; break; }
-				}
-				if ((attrs['http-equiv'] || '').trim().toLowerCase() === 'content-type' && attrs.content) {
-					const m = /(?:^|;)\s*charset\s*=\s*(?:"\s*([a-z0-9_\-:.]+)\s*"|'\s*([a-z0-9_\-:.]+)\s*'|([a-z0-9_\-:.]+)\s*(?=$|[\s;]))/i.exec(attrs.content);
-					if (m) {
-						const valid = normalizeCharsetLabel(m[1] || m[2] || m[3], true);
-						if (valid) { charset = valid; break; }
-					}
-				}
-			}
+			const prefixText = new TextDecoder().decode(head.subarray(0, total));
+			charset = isXml ? xmlDeclaredCharset(prefixText) : prescanHtmlCharset(prefixText);
 			if (charset) break;
 		}
 	} finally {
@@ -2801,7 +2854,7 @@ Disallow: /wss%3A
 			const charset = getCharset(contentType);
 			if (kind === 'html') {
 				// BOM 优先于 HTTP charset，最后才读文档内声明。
-				const sniffed = await sniffHtmlCharset(upstream.body, charset);
+				const sniffed = await sniffHtmlCharset(upstream.body, charset, mimeType(contentType) === 'application/xhtml+xml');
 				let body = sniffed.body;
 				if (body && sniffed.charset && !isUtf8Charset(sniffed.charset)) {
 					try {

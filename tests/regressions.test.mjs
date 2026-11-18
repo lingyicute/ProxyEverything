@@ -332,3 +332,24 @@ test('SVG scanner keeps declarations and exact XML element names intact', () => 
 	assert.equal(rewriteSvg(input, base, origin), expected);
 	assert.equal(rewriteSvg(`<svg><style>/* unfinished */`, base, origin), `<svg><style>/* unfinished */`);
 });
+
+test('HTML charset prescan recognizes only complete metadata declarations', async () => {
+	const fragments = [
+		'<div title="<meta charset=gbk>"></div>',
+		'<meta-description charset="gbk">',
+		'<meta data:charset="gbk">',
+		'<!-- <meta charset=gbk> --!>',
+		'<meta charset="utf-8" charset="gbk">',
+	];
+	const text = fragments.join('') + '<meta charset="windows-1252">';
+	for (const [input, expected] of [[text, 'utf-8'], [fragments.slice(0, 4).join('') + '<meta charset="windows-1252">', 'windows-1252']]) {
+		const stream = new Response(input).body;
+		const sniffed = await sniffHtmlCharset(stream);
+		assert.equal(sniffed.charset, expected);
+		assert.equal(await new Response(sniffed.body).text(), input);
+	}
+	const xhtml = '<?xml version="1.0" encoding="windows-1252"?><html><meta charset="gbk" /></html>';
+	const sniffed = await sniffHtmlCharset(new Response(xhtml).body, null, true);
+	assert.equal(sniffed.charset, 'windows-1252');
+	await sniffed.body.cancel();
+});
