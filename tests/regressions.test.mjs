@@ -302,3 +302,16 @@ test('fast paths preserve untouched JS/CSS while still rewriting escaped style U
 		`background: url("${proxy('a.png')}")`
 	);
 });
+
+test('upstream HTTP and opening WebSocket handshakes use the request cancellation signal', async t => {
+	const pending = [];
+	t.mock.method(globalThis, 'fetch', async (_, init) => { pending.push(init.signal); return new Response('fixture'); });
+	for (const headers of [{}, { Upgrade: 'websocket' }]) {
+		const controller = new AbortController();
+		const request = new Request(proxy(base), { headers, signal: controller.signal });
+		await worker.fetch(request, { ALLOWED_TARGET_ORIGINS: 'https://example.com' });
+		assert.equal(pending.at(-1), request.signal);
+		controller.abort();
+		assert.equal(pending.at(-1).aborted, true);
+	}
+});
