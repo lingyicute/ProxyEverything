@@ -86,7 +86,7 @@ globalThis.fetch = async (url, init) => {
 const send = (url, { method = 'GET', headers = {} } = {}) => {
 	forwarded = null;
 	return worker.fetch({ url, method, headers: new Headers(headers), body: null }, {
-		ALLOWED_TARGET_ORIGINS: 'https://example.com,https://api.example.net,https://cdn.example.net',
+		ALLOWED_TARGET_ORIGINS: 'https://example.com,https://api.example.net,https://cdn.example.net,http://example.com',
 	});
 };
 const referer = proxy('https://example.com/dir/page?secret=1');
@@ -158,4 +158,28 @@ test('manifest: id resolves against the start_url origin, other URLs against the
 		proxy('https://www.example.com/app/main'));
 	assert.equal(rewrite({ id: 'app' }).id, proxy('https://example.com/app'));
 	assert.equal(rewrite({ id: '' }).id, '');
+});
+
+test('HTTP downgrade does not forward Referer and a different proxy origin is not trusted', async () => {
+	await send(proxy('http://example.com/photo.png'), { headers: { referer } });
+	assert.equal(forwarded.headers.get('referer'), null);
+	await send(proxy('https://example.com/photo.png'), {
+		headers: { referer: referer.replace('https://proxy.example', 'http://proxy.example') },
+	});
+	assert.equal(forwarded.headers.get('referer'), null);
+});
+
+test('WebSocket forwards only an HTTP(S) source established by the referring page', async () => {
+	const target = proxy('wss://example.com/socket');
+	// URL.origin keeps wss: and the worker normalizes that to https: for subrequests.
+	for (const [source, expected] of [[undefined, 'null'], [referer, 'https://example.com']]) {
+		const headers = { upgrade: 'websocket', origin };
+		if (source) headers.referer = source;
+		assert.equal((await send(target, { headers })).status, 502, 'the stub does not upgrade');
+		assert.equal(forwarded.url, 'https://example.com/socket');
+		assert.equal(forwarded.headers.get('origin'), expected);
+		assert.equal(forwarded.headers.get('referer'), source ? 'https://example.com/dir/page?secret=1' : null);
+	}
+	await send(target, { headers: { upgrade: 'websocket' } });
+	assert.equal(forwarded.headers.get('origin'), null);
 });

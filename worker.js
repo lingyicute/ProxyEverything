@@ -2072,7 +2072,7 @@ function refererTarget(request, workerOrigin, env) {
 	if (!referer) return null;
 	try {
 		const rUrl = new URL(referer);
-		const rTarget = isWorkerHost(rUrl, workerOrigin) ? parseTarget(rUrl) : null;
+		const rTarget = rUrl.origin === workerOrigin ? parseTarget(rUrl) : null;
 		if (rTarget && !isWorkerHost(rTarget, workerOrigin) && !targetPolicyError(rTarget, env)) {
 			if (rTarget.protocol === 'ws:') rTarget.protocol = 'http:';
 			else if (rTarget.protocol === 'wss:') rTarget.protocol = 'https:';
@@ -2082,21 +2082,28 @@ function refererTarget(request, workerOrigin, env) {
 	return null;
 }
 
-/** 只转发可还原的代理页面 Referer；缺失或不可验证时不伪造来源。 */
-function resolveUpstreamReferer(request, workerOrigin, destinationUrl, env) {
-	const rTarget = refererTarget(request, workerOrigin, env);
-	if (!rTarget) return null;
-	// 浏览器默认 strict-origin-when-cross-origin：跨源请求只带来源，不向第三方泄露来源页的路径与查询串。
-	return rTarget.origin === new URL(destinationUrl).origin ? rTarget.href : rTarget.origin + '/';
-}
-
-/** 浏览器对代理域一律上报 Sec-Fetch-Site: same-origin；按真实来源页与目标源改写，防止绕过上游 Fetch Metadata 校验。 */
-function applyUpstreamSecFetchSite(headers, request, referer, destinationUrl) {
-	if (!request.headers.has('sec-fetch-site')) return;
-	const current = (request.headers.get('sec-fetch-site') || '').trim().toLowerCase();
-	if (!current || current === 'none' || current === 'cross-site') return;
-	const sameOrigin = Boolean(referer) && new URL(referer).origin === new URL(destinationUrl).origin;
-	headers.set('Sec-Fetch-Site', sameOrigin ? 'same-origin' : 'cross-site');
+/** HTTP 和 WebSocket 一律从真实的代理页面还原来源；没有证据时不得冒充目标。 */
+function buildUpstreamHeaders(request, workerOrigin, destination, env) {
+	const headers = new Headers();
+	for (const [name, value] of request.headers) {
+		const key = name.toLowerCase();
+		if (!key.startsWith('cf-') && !STRIP_FORWARDED_HEADERS.has(key)) headers.set(name, value);
+	}
+	stripHopByHop(headers);
+	headers.delete('Host');
+	headers.delete('Referer');
+	const source = refererTarget(request, workerOrigin, env);
+	const sameOrigin = source?.origin === destination.origin;
+	// strict-origin-when-cross-origin：跨源不转发路径或查询串，HTTPS → HTTP 不转发 Referer。
+	if (source && !(source.protocol === 'https:' && destination.protocol === 'http:')) {
+		headers.set('Referer', sameOrigin ? source.href : source.origin + '/');
+	}
+	if (request.headers.has('Origin')) headers.set('Origin', source?.origin ?? 'null');
+	const fetchSite = headers.get('Sec-Fetch-Site')?.trim().toLowerCase();
+	if (fetchSite === 'same-origin' || fetchSite === 'same-site') {
+		headers.set('Sec-Fetch-Site', sameOrigin ? 'same-origin' : 'cross-site');
+	}
+	return headers;
 }
 
 // ============================================================
@@ -2109,21 +2116,8 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin, env) {
 	if (upstreamUrl.protocol === 'ws:') upstreamUrl.protocol = 'http:';
 	else if (upstreamUrl.protocol === 'wss:') upstreamUrl.protocol = 'https:';
 
-	// 构造转发请求：带上原始头（去掉宿主相关）
-	const headers = new Headers();
-	for (const [k, v] of request.headers) {
-		const lk = k.toLowerCase();
-		if (lk.startsWith('cf-') || STRIP_FORWARDED_HEADERS.has(lk)) continue;
-		headers.set(k, v);
-	}
-	stripHopByHop(headers);
-	headers.delete('host');
-	if (ck) applyRequestCookieScope(headers, request, ck.ns);
-	headers.set('Origin', upstreamUrl.origin);
-	const referer = resolveUpstreamReferer(request, workerOrigin, upstreamUrl.href, env);
-	if (referer) headers.set('Referer', referer);
-	else headers.delete('Referer');
-	applyUpstreamSecFetchSite(headers, request, referer, upstreamUrl.href);
+	const headers = buildUpstreamHeaders(request, workerOrigin, upstreamUrl, env);
+	applyRequestCookieScope(headers, request, ck.ns);
 	headers.set('Connection', 'Upgrade');
 	headers.set('Upgrade', 'websocket');
 
@@ -2282,23 +2276,7 @@ Disallow: /wss%3A
 		}
 		const fetchUrl = targetUrl.href;
 
-		const fwdHeaders = new Headers();
-		for (const [k, v] of request.headers) {
-			const lk = k.toLowerCase();
-			if (lk.startsWith('cf-') || STRIP_FORWARDED_HEADERS.has(lk)) continue;
-			fwdHeaders.set(k, v);
-		}
-		stripHopByHop(fwdHeaders);
-		// 不凭空制造来源头：导航/图片等无 Origin 的请求应保持无 Origin；
-		// 请求有 Origin 但没有可验证的代理页面 Referer 时，不能冒充目标站点绕过 CSRF 校验。
-		const referer = resolveUpstreamReferer(request, workerOrigin, fetchUrl, env);
-		if (referer) fwdHeaders.set('Referer', referer);
-		else fwdHeaders.delete('Referer');
-		if (request.headers.has('origin')) {
-			fwdHeaders.set('Origin', referer ? new URL(referer).origin : 'null');
-		} else fwdHeaders.delete('Origin');
-		applyUpstreamSecFetchSite(fwdHeaders, request, referer, fetchUrl);
-		fwdHeaders.delete('host');
+		const fwdHeaders = buildUpstreamHeaders(request, workerOrigin, targetUrl, env);
 		// Cookie 按站点隔离：只回传属于当前目标站点的那部分，并剥掉命名空间前缀
 		applyRequestCookieScope(fwdHeaders, request, ck.ns);
 		// 记录是否真的带 Cookie 回源，供缓存策略判断
