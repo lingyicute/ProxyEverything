@@ -169,7 +169,7 @@ test('Referer lookups enforce ALLOWED_TARGET_ORIGINS and rewrite Sec-Fetch-Site'
 		forwarded = { url: String(url), headers: new Headers(init.headers) };
 		return new Response('ok', { headers: { 'content-type': 'text/plain' } });
 	};
-	const send = (url, headers = {}, env = undefined) => {
+	const send = (url, headers = {}, env = { ALLOWED_TARGET_ORIGINS: 'https://example.com,https://other.example' }) => {
 		forwarded = null;
 		return worker.fetch({ url, method: 'GET', headers: new Headers(headers), body: null }, env);
 	};
@@ -301,4 +301,23 @@ test('fast paths preserve untouched JS/CSS while still rewriting escaped style U
 		rewriteStyleAttr('background: \\75 rl(a.png)', base, origin),
 		`background: url("${proxy('a.png')}")`
 	);
+});
+
+test('upstream access requires a valid explicit origin allowlist', async () => {
+	const originalFetch = globalThis.fetch;
+	const seen = [];
+	globalThis.fetch = async url => { seen.push(url); return new Response('ok'); };
+	try {
+		const request = new Request(proxy('https://example.com/page'));
+		for (const value of [undefined, '', '*', 'https://example.com/path', 'not a URL']) {
+			const response = await worker.fetch(request, { ALLOWED_TARGET_ORIGINS: value });
+			assert.equal(response.status, 503);
+		}
+		assert.equal((await worker.fetch(request, { ALLOWED_TARGET_ORIGINS: 'https://example.com:9443' })).status, 403);
+		assert.deepEqual(seen, []);
+		assert.equal((await worker.fetch(request, { ALLOWED_TARGET_ORIGINS: 'https://example.com' })).status, 200);
+		assert.deepEqual(seen, ['https://example.com/page']);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });

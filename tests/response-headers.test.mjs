@@ -18,7 +18,9 @@ async function fetchThrough(target, upstreamHeaders, body = 'body') {
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async () => new Response(body, { headers: upstreamHeaders });
 	try {
-		return await worker.fetch({ url: proxy(target), method: 'GET', headers: new Headers(), body: null });
+		return await worker.fetch({ url: proxy(target), method: 'GET', headers: new Headers(), body: null }, {
+			ALLOWED_TARGET_ORIGINS: new URL(target).origin,
+		});
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

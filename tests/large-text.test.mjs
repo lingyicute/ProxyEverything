@@ -30,7 +30,9 @@ async function proxyResponse(bytes, contentType, path) {
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async () => upstreamResponse(bytes, contentType);
 	try {
-		return await worker.fetch(new Request(origin + '/' + encodeURIComponent('https://site.example') + path), {});
+		return await worker.fetch(new Request(origin + '/' + encodeURIComponent('https://site.example') + path), {
+			ALLOWED_TARGET_ORIGINS: 'https://site.example',
+		});
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

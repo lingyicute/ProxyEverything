@@ -101,7 +101,7 @@ test('Worker fetch accepts both new and previously encoded proxy paths', async (
 	};
 	try {
 		for (const path of paths) {
-			const response = await worker.fetch(new Request(path), {});
+			const response = await worker.fetch(new Request(path), { ALLOWED_TARGET_ORIGINS: 'https://site.example' });
 			assert.equal(response.status, 200);
 			assert.equal(await response.text(), 'ok');
 		}

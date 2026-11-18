@@ -85,7 +85,9 @@ globalThis.fetch = async (url, init) => {
 };
 const send = (url, { method = 'GET', headers = {} } = {}) => {
 	forwarded = null;
-	return worker.fetch({ url, method, headers: new Headers(headers), body: null });
+	return worker.fetch({ url, method, headers: new Headers(headers), body: null }, {
+		ALLOWED_TARGET_ORIGINS: 'https://example.com,https://api.example.net,https://cdn.example.net',
+	});
 };
 const referer = proxy('https://example.com/dir/page?secret=1');
 

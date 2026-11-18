@@ -2023,7 +2023,7 @@ function parseTarget(url) {
 }
 
 /**
- * 部署防护：拒绝 IP 字面量/明显本地名称；可选精确 HTTP(S) 来源允许列表。
+ * 部署防护：拒绝 IP 字面量/明显本地名称；必须配置精确的 HTTP(S) 来源允许列表。
  * 这不是 DNS/IP 出站防火墙：公网名称仍可能解析为内网地址或发生 DNS rebinding。
  */
 function targetPolicyError(targetUrl, env) {
@@ -2036,8 +2036,7 @@ function targetPolicyError(targetUrl, env) {
 		host === 'localhost' || /\.(localhost|local|internal)$/.test(host)) {
 		return { status: 403, message: '不允许代理 IP 字面量或本地目标名称' };
 	}
-	const configured = env && env.ALLOWED_TARGET_ORIGINS;
-	if (configured === undefined) return null;
+	const configured = env?.ALLOWED_TARGET_ORIGINS;
 	try {
 		if (typeof configured !== 'string' || !configured.trim()) throw new Error();
 		const origins = configured.split(',').map(value => {
