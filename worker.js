@@ -2738,7 +2738,7 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin, env) {
 	headers.set('Upgrade', 'websocket');
 
 	// 自动跟随重定向可能把手工转发的 Cookie 带到另一个站点。
-	const resp = await fetch(upstreamUrl.href, { headers, redirect: 'manual' });
+	const resp = await fetch(upstreamUrl.href, { headers, redirect: 'manual', signal: request.signal });
 	const upstream = resp.webSocket;
 	if (!upstream) {
 		if (resp.body) resp.body.cancel().catch(() => {});
@@ -2881,6 +2881,7 @@ Disallow: /
 		try {
 			upstream = await fetch(fetchUrl, {
 				method: request.method,
+				signal: request.signal,
 				headers: fwdHeaders,
 				body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
 				redirect: 'manual',
