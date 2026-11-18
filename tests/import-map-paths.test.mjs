@@ -88,7 +88,8 @@ test('browser shim generates the same proxy paths as the server', () => {
 		XMLHttpRequest: { prototype: { open() {} } },
 	});
 
-	for (const path of ['./admin/main.js', './a%2Fb/file%20name.js', '/assets/logo.svg']) {
+	for (const path of ['./admin/main.js', './a%2Fb/file%20name.js', '/assets/logo.svg',
+		proxy + '//assets.example/file?keep=1']) {
 		assert.equal(window.__PE__.rp(path), rewriteUrl(path, base, proxy));
 	}
 });

@@ -1080,7 +1080,8 @@ function rp(v){
           return WO+pu.pathname+urlSuffix(pu);
         }
         if(pu.protocol==='ws:'||pu.protocol==='wss:')forcedWs=pu.protocol;
-        s=pu.pathname+urlSuffix(pu);
+        // 用完整来源拼接：已解析路径开头的双斜线不是新的主机名。
+        s=new URL(base()).origin+pu.pathname+urlSuffix(pu);
       }
     }
   }catch(e){}
