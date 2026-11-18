@@ -10,7 +10,7 @@ const { transformHtml } = await import(
 
 const base = 'https://example.com/dir/page';
 const origin = 'https://proxy.example';
-const proxy = path => origin + '/' + encodeURIComponent('https://example.com') + path;
+const proxy = path => origin + '/~' + encodeURIComponent('https://example.com') + path;
 
 /** HTMLRewriter 只在 Workers 运行时存在：记录各选择器的处理器，直接驱动元素回调。 */
 function collectHandlers() {

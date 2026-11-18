@@ -29,6 +29,7 @@ test('import map package prefixes keep a literal slash and resolve submodules', 
 
 	assert.equal(map.imports['pkg/'].endsWith('/'), true);
 	assert.equal(mappedUrl('widget.js', map.imports['pkg/']), 'https://site.example/app/lib/widget.js');
+	assert.equal(mappedUrl('dir/a%2Fb.js?', map.imports['pkg/']), 'https://site.example/app/lib/dir/a%2Fb.js?');
 	const srcPrefix = rewriteUrl('./src/', base, proxy);
 	assert.equal(map.imports[srcPrefix].endsWith('/'), true);
 	assert.equal(rewriteUrl('./src/widget.js', base, proxy).startsWith(srcPrefix), true);
@@ -65,11 +66,13 @@ test('path separators survive while encoded slashes and legacy links round-trip'
 	const rewritten = rewriteUrl(target, base, proxy);
 
 	assert.equal(rewritten,
-		'https://proxy.example/https%3A%2F%2Fsite.example/a%252Fb/%25E6%25B5%258B%25E8%25AF%2595%2520a.js?x=1#section');
+		'https://proxy.example/~https%3A%2F%2Fsite.example/a%2Fb/%E6%B5%8B%E8%AF%95%20a.js?x=1#section');
 	assert.equal(parseTarget(new URL(rewritten)).href,
 		'https://site.example/a%2Fb/%E6%B5%8B%E8%AF%95%20a.js?x=1');
 	const oldLink = proxy + '/' + encodeURIComponent('https://site.example/old/a%2Fb');
 	assert.equal(parseTarget(new URL(oldLink)).href, 'https://site.example/old/a%2Fb');
+	assert.equal(parseTarget(new URL(proxy + '/https%3A%2F%2Fsite.example/old/a%252Fb')).href,
+		'https://site.example/old/a%2Fb');
 });
 
 test('browser shim generates the same proxy paths as the server', () => {

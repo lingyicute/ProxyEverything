@@ -2,11 +2,11 @@
  * ProxyEverything — 通用网页反向代理 Cloudflare Worker
  *
  * URL 方案：
- *   https://proxy-any.92li.uk/<encodeURIComponent(协议 + '//' + 主机)>/路径?目标查询串
- *   路径分隔符 / 保持原样，其余路径段分别用 encodeURIComponent 编码。
+ *   https://worker.example/~<encodeURIComponent(协议 + '//' + 主机)>/路径?目标查询串
+ *   '~' 版本只编码来源，保留 URL 已规范化的路径和查询串，可供浏览器原生相对解析。
  *   例：https://example.com/page?a=1
- *     → https://proxy-any.92li.uk/https%3A%2F%2Fexample.com/page?a=1
- *   旧版整体编码的链接（…/https%3A%2F%2Fexample.com%2Fpage）仍可解析。
+ *     → https://worker.example/~https%3A%2F%2Fexample.com/page?a=1
+ *   不含 ~ 的逐段编码和旧版整址编码链接仍可解析。
  *
  * 架构：单文件、ES Module 语法，无外部依赖，可直接粘贴到 Cloudflare Dashboard，
  * 或 `wrangler deploy` 部署。
@@ -142,30 +142,41 @@ function safeDecode(s) {
 	}
 }
 
-/**
- * 目标绝对 URL → 代理 URL（同源相对地址，可安全写入 href/src）
- * 查询串保持明文（与原实现兼容），哈希原样保留。
- */
-function toProxyUrl(targetUrl, workerOrigin) {
-	const u = new URL(targetUrl);
-	if (u.protocol !== 'http:' && u.protocol !== 'https:' &&
-		u.protocol !== 'ws:' && u.protocol !== 'wss:') return targetUrl;
-	const host = normalizeHostname(u.hostname);
-	if (host) {
-		try { u.hostname = host; } catch {}
-	}
-	// 路径分隔符保持字面量，import map 前缀与相对模块 URL 才能在代理路径下正确匹配；
-	// 逐段编码，使上游路径中的 %2F 经过一次解码后仍保持编码。
-	const path = u.pathname.split('/').map(encodeURIComponent).join('/');
-	return `${workerOrigin}/${encodeURIComponent(u.protocol + '//' + u.host)}${path}${u.search}${u.hash}`;
+function urlSuffix(u) {
+	// URL.search / .hash 会吞掉空的 ? / #；直接从已序列化的地址保留这些分隔符。
+	const href = u.href;
+	const index = href.search(/[?#]/);
+	return index < 0 ? '' : href.slice(index);
 }
 
-/**
- * 任意形式的 URL（绝对/协议相对/根相对/相对/已代理）→ 代理 URL。
- * 解析失败或不可代理的 scheme（data:、javascript:、mailto: 等）原样返回。
- */
+function encodeProxyPath(u, protocol = u.protocol) {
+	return `/~${encodeURIComponent(protocol + '//' + u.host)}${u.pathname}${urlSuffix(u)}`;
+}
+
+function toProxyUrl(targetUrl, workerOrigin) {
+	const u = new URL(targetUrl);
+	if (!['http:', 'https:', 'ws:', 'wss:'].includes(u.protocol)) return targetUrl;
+	const host = normalizeHostname(u.hostname);
+	if (host) u.hostname = host;
+	return workerOrigin + encodeProxyPath(u);
+}
+
 function isProxiedPath(pathname) {
-	return /^\/(https?|wss?)(?:%3A|:)(?:%2F|\/){2}/i.test(pathname);
+	return /^\/(?:~(?:https?|wss?)%3a%2f%2f|(?:https?|wss?)(?:%3a|:)(?:%2f|\/){2})/i.test(pathname);
+}
+
+function decodeProxyPath(pathname) {
+	const raw = pathname.replace(/^\/+/, '');
+	if (!raw.startsWith('~')) return safeDecode(raw);
+	const cut = raw.indexOf('/');
+	const origin = safeDecode(raw.slice(1, cut === -1 ? raw.length : cut));
+	if (!/^(?:https?|wss?):\/\/[^\\/?#\s]+$/i.test(origin)) return '';
+	return origin + (cut === -1 ? '/' : raw.slice(cut));
+}
+
+// 这些纯函数也供无依赖的浏览器脚本使用，避免引入不同的编解码规则。
+function browserPathHelpers() {
+	return [safeDecode, urlSuffix, encodeProxyPath, isProxiedPath, decodeProxyPath].map(fn => fn.toString()).join('\n');
 }
 
 /** 判断 URL 是否指向代理 Worker 自身主机与端口（忽略协议差异与尾点） */
@@ -191,7 +202,7 @@ function rewriteUrl(value, baseUrl, workerOrigin) {
 	if (isProxiedPath(v)) {
 		try {
 			const u = new URL(v, workerOrigin);
-			return u.pathname + u.search + u.hash;
+			return u.pathname + urlSuffix(u);
 		} catch {
 			return v;
 		}
@@ -209,15 +220,15 @@ function rewriteUrl(value, baseUrl, workerOrigin) {
 			// 已代理（同源主机且路径是编码后的目标 URL）
 			if (isProxiedPath(abs.pathname)) {
 				if (!/^([a-z][a-z0-9+.-]*:)?\/\//i.test(v)) {
-					return abs.pathname + abs.search + abs.hash;
+					return abs.pathname + urlSuffix(abs);
 				}
 				const origin = abs.protocol === 'ws:' || abs.protocol === 'wss:'
 					? `${abs.protocol}//${new URL(workerOrigin).host}`
 					: workerOrigin;
-				return `${origin}${abs.pathname}${abs.search}${abs.hash}`;
+				return `${origin}${abs.pathname}${urlSuffix(abs)}`;
 			}
 			// 落到代理域自身的非代理路径：回退按目标基地址解析，避免触发自代理拦截
-			const rebound = new URL(abs.pathname + abs.search + abs.hash, baseUrl);
+			const rebound = new URL(new URL(baseUrl).origin + abs.pathname + urlSuffix(abs));
 			if (abs.protocol === 'ws:' || abs.protocol === 'wss:') {
 				rebound.protocol = rebound.protocol === 'http:' ? 'ws:' : 'wss:';
 			}
@@ -918,11 +929,7 @@ var WOU=new URL(WO);
 var WOH=WOU.hostname.toLowerCase().replace(/\\.+$/,'');
 var WOP=WOU.port||'';
 var CK=${JSON.stringify(cookieNs || '')};
-function decSafe(s){
-  try{return decodeURIComponent(s);}catch(e){
-    try{return decodeURIComponent(String(s).replace(/%(?![0-9a-f]{2})/gi,'%25'));}catch(_){return s;}
-  }
-}
+${browserPathHelpers()}
 function isSelfHost(u){
   var h=(u&&u.hostname||'').toLowerCase().replace(/\\.+$/,'');
   if(!h)return false;
@@ -931,17 +938,15 @@ function isSelfHost(u){
   return (h===WOH&&p===WOP)||(Boolean(lh)&&h===lh&&p===(location.port||''));
 }
 function currentTarget(){
-var RAW=location.pathname.substring(1);
-var DEC=decSafe(RAW).trim().replace(/^\\/+/,'');
+var DEC=decodeProxyPath(location.pathname).trim().replace(/^\\/+/,'');
 if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(DEC))DEC='https://'+DEC;
 var hIdx=DEC.indexOf('#');if(hIdx>=0)DEC=DEC.substring(0,hIdx);
-var full=DEC+(location.search?(DEC.indexOf('?')>=0?'&':'?')+location.search.substring(1):'');
+var search=urlSuffix(new URL(location.href)).split('#',1)[0];
+var full=DEC+(search?(DEC.indexOf('?')>=0?'&':'?')+search.substring(1):'');
 try{var u=new URL(full);if(u.protocol==='ws:')u.protocol='http:';else if(u.protocol==='wss:')u.protocol='https:';u.username='';u.password='';u.hostname=u.hostname.toLowerCase().replace(/\\.+$/,'');return u.href;}catch(e){return full;}
 }
-var TARGET=currentTarget();
 var ABS_RE=/^[a-z][a-z0-9+.-]*:\\/\\//i;
 var SKIP_RE=/^(data:|blob:|javascript:|mailto:|tel:|sms:|about:|#)/i;
-var PROXY_RE=/^\\/(https?|wss?)(?:%3A|:)(?:%2F|\\/){2}/i;
 function base(){
   var target=currentTarget();
   var list=document.querySelectorAll?document.querySelectorAll('base[data-pe-base],base[href]'):[];
@@ -961,33 +966,33 @@ function rp(v){
   }
   var s=String(v).trim();
   if(!s||SKIP_RE.test(s))return s;
-  if(PROXY_RE.test(s))return s;
+  if(isProxiedPath(s))return s;
   var forcedWs='';
   try{
     if(s===WO)s='/';
     else if(ABS_RE.test(s)||s.indexOf('//')===0){
       var pu=new URL(s,WO);
       if(isSelfHost(pu)){
-        if(PROXY_RE.test(pu.pathname)){
+        if(isProxiedPath(pu.pathname)){
           if(pu.protocol==='ws:'||pu.protocol==='wss:'){
             var canonH=location.hostname||WOU.hostname;
             if(canonH&&pu.hostname!==canonH)pu.hostname=canonH;
             return pu.href;
           }
-          return WO+pu.pathname+pu.search+pu.hash;
+          return WO+pu.pathname+urlSuffix(pu);
         }
         if(pu.protocol==='ws:'||pu.protocol==='wss:')forcedWs=pu.protocol;
-        s=pu.pathname+pu.search+pu.hash;
+        s=pu.pathname+urlSuffix(pu);
       }
     }
   }catch(e){}
   var u;try{u=new URL(s,base());}catch(e){return s;}
-  if(u.origin===WO&&PROXY_RE.test(u.pathname))return u.href;
+  if(u.origin===WO&&isProxiedPath(u.pathname))return u.href;
   var p=forcedWs?(u.protocol==='http:'?'ws:':'wss:'):u.protocol;
   if(p!=='http:'&&p!=='https:'&&p!=='ws:'&&p!=='wss:')return s;
   var uh=u.hostname.toLowerCase().replace(/\\.+$/,'');
   if(uh){try{u.hostname=uh;}catch(e){}}
-  return WO+'/'+encodeURIComponent(p+'//'+u.host)+u.pathname.split('/').map(encodeURIComponent).join('/')+u.search+u.hash;
+  return WO+encodeProxyPath(u,p);
 }
 function rwUrlArg(a){
   if(typeof a==='string')return rp(a);
@@ -999,7 +1004,7 @@ function rpBase(a){
   return rwUrlArg(a);
 }
 function isProxyRequestUrl(value){
-  try{var u=new URL(value,WO);return u.origin===WO&&PROXY_RE.test(u.pathname);}catch(e){return false;}
+  try{var u=new URL(value,WO);return u.origin===WO&&isProxiedPath(u.pathname);}catch(e){return false;}
 }
 function rwInit(init,stripIntegrity){
   if(init!=null&&typeof init!=='object'&&typeof init!=='function')return init;
@@ -2477,7 +2482,7 @@ function normalizeHostname(hostname) {
 /** 从代理 URL 解析出目标绝对 URL；非法时返回 null */
 function parseTarget(url) {
 	if (url.pathname === '/' || url.pathname === '') return null;
-	const raw = safeDecode(url.pathname.substring(1));
+	const raw = decodeProxyPath(url.pathname);
 	if (!raw) return null;
 	const trimmed = raw.trim().replace(/^\/+/, '');
 	if (!trimmed) return null;
@@ -2492,7 +2497,7 @@ function parseTarget(url) {
 	const hashIdx = target.indexOf('#');
 	if (hashIdx >= 0) target = target.slice(0, hashIdx);
 	// 不保留内部参数名：目标站可能合法使用 __pe，且查询串可能参与签名。
-	const search = url.search;
+	const search = urlSuffix(url).split('#', 1)[0];
 	if (search) {
 		target += (target.includes('?') ? '&' : '?') + search.slice(1);
 	}
@@ -2508,7 +2513,7 @@ function parseTarget(url) {
 	const host = normalizeHostname(u.hostname);
 	if (!host || host.startsWith('.') || host.includes('..') ||
 		(!host.includes('.') && host !== 'localhost' && !host.startsWith('['))) return null;
-	u.username = ''; u.password = '';
+	if (u.username || u.password) return null;
 	u.hash = '';
 	return u;
 }
@@ -2702,15 +2707,8 @@ export default {
 		if (url.pathname === '/robots.txt') {
 			return new Response(request.method === 'HEAD' ? null :
 `User-agent: *
-Allow: /
-Disallow: /http:
-Disallow: /https:
-Disallow: /http%3A
-Disallow: /https%3A
-Disallow: /ws:
-Disallow: /wss:
-Disallow: /ws%3A
-Disallow: /wss%3A
+Allow: /$
+Disallow: /
 `,
 				{ headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=86400' } }
 			);
@@ -2718,10 +2716,10 @@ Disallow: /wss%3A
 
 		// ---- 漏网的站内相对请求：innerHTML、location.href = '/x'、Worker 内请求、默认 /favicon.ico 等未经改写的地址
 		//      会直接落到代理域。路径不带协议而 Referer 是代理页面时，按来源页的目标站点还原并重定向 ----
-		if (!/^(?:https?|wss?):\/\//i.test(safeDecode(url.pathname.substring(1)).trim().replace(/^\/+/, ''))) {
+		if (!isProxiedPath(url.pathname) && !/^(?:https?|wss?):\/\//i.test(decodeProxyPath(url.pathname).trim().replace(/^\/+/, ''))) {
 			const refTarget = refererTarget(request, workerOrigin, env);
 			if (refTarget) {
-				const leaked = new URL(url.pathname.replace(/^\/+/, '/') + url.search, refTarget);
+				const leaked = new URL(refTarget.origin + url.pathname + urlSuffix(url).split('#', 1)[0]);
 				return new Response(null, {
 					status: 307,
 					headers: { 'Location': toProxyUrl(leaked.href, workerOrigin), 'Cache-Control': 'no-store' },
@@ -2799,9 +2797,9 @@ Disallow: /wss%3A
 					if (!['http:', 'https:'].includes(abs.protocol)) throw new Error('无效重定向协议');
 					if (isWorkerHost(abs, workerOrigin)) {
 						if (isProxiedPath(abs.pathname)) {
-							resp.headers.set('Location', `${workerOrigin}${abs.pathname}${abs.search}${abs.hash}`);
+							resp.headers.set('Location', `${workerOrigin}${abs.pathname}${urlSuffix(abs)}`);
 						} else {
-							const rebound = new URL(abs.pathname + abs.search + abs.hash, fetchUrl);
+							const rebound = new URL(targetUrl.origin + abs.pathname + urlSuffix(abs));
 							resp.headers.set('Location', toProxyUrl(rebound.href, workerOrigin));
 						}
 					} else {
@@ -3317,6 +3315,7 @@ ${md3Topbar()}
 ${md3Overlays()}
 <script>${MD3_JS}
 (function(){
+${browserPathHelpers()}
   var input=document.getElementById('targetUrl');
   var form=document.getElementById('urlForm');
   document.querySelectorAll('.chip').forEach(function(c){
@@ -3336,25 +3335,22 @@ ${md3Overlays()}
       try{
         var u0=new URL(v,location.href);
         if(u0.hostname.toLowerCase().replace(/\\.+$/,'')===selfH&&u0.port===location.port&&
-           /^\\/(https?|wss?)(?:%3A|:)(?:%2F|\\/){2}/i.test(u0.pathname)){
-          v=u0.pathname+u0.search+u0.hash;
+           isProxiedPath(u0.pathname)){
+          v=u0.pathname+urlSuffix(u0);
         }
       }catch(_){}
     }
-    if(/^(?:\\/+(?:https?|wss?)(?:%3A|:)(?:%2F|\\/){2}|(?:https?|wss?)(?:%3A(?:%2F|\\/){2}|:(?:%2F(?:%2F|\\/)|\\/%2F)))/i.test(v)){
-      var qIdx=v.search(/[?#]/);
-      var pPart=qIdx>=0?v.slice(0,qIdx):v;
-      var sPart=qIdx>=0?v.slice(qIdx):'';
-      try{
-        var rawP=pPart.replace(/^\\/+/,'');
-        var dec;
-        try{dec=decodeURIComponent(rawP);}catch(_){dec=decodeURIComponent(rawP.replace(/%(?![0-9a-f]{2})/gi,'%25'));}
-        dec=dec.replace(/^ws(s?):\\/\\//i,'http$1://');
+    var qIdx=v.search(/[?#]/);
+    var pPart=qIdx>=0?v.slice(0,qIdx):v;
+    var sPart=qIdx>=0?v.slice(qIdx):'';
+    if(!/^(?:https?|wss?):\\/\\//i.test(pPart)&&isProxiedPath('/'+pPart.replace(/^\\/+/,'') )){
+      var dec=decodeProxyPath(pPart).replace(/^ws(s?):\\/\\//i,'http$1://');
+      if(dec){
         var hIdx=dec.indexOf('#');
         if(hIdx>=0)dec=dec.slice(0,hIdx);
         if(sPart.charAt(0)==='?'&&dec.indexOf('?')>=0)sPart='&'+sPart.slice(1);
         v=dec+sPart;
-      }catch(_){}
+      }
     }
     if(/^[a-z][a-z0-9+.-]*:/i.test(v)&&!/^https?:\\/\\//i.test(v)&&!/^(?:localhost\\.?|[a-z0-9_-]+\\.[a-z0-9_.-]+):\\d+(?:[/?#]|$)/i.test(v)){
       window.__peSnack('仅支持 http:// 或 https:// 网址');
@@ -3382,7 +3378,7 @@ ${md3Overlays()}
       input.focus();
       return;
     }
-    var nextHref='/'+encodeURIComponent(u.protocol+'//'+u.host)+u.pathname.split('/').map(encodeURIComponent).join('/')+u.search+u.hash;
+    var nextHref=encodeProxyPath(u);
     window.__peBusy(true);
     setTimeout(function(){
       location.href=nextHref;

@@ -11,7 +11,7 @@ const { default: worker } = await import(
 const origin = 'https://proxy.example';
 const proxy = url => {
 	const u = new URL(url);
-	return origin + '/' + encodeURIComponent(u.origin) + u.pathname.split('/').map(encodeURIComponent).join('/') + u.search;
+	return origin + '/~' + encodeURIComponent(u.origin) + u.pathname + u.search;
 };
 
 async function fetchThrough(target, upstreamHeaders, body = 'body', requestHeaders = {}) {

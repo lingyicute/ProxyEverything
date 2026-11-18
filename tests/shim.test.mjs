@@ -10,7 +10,7 @@ const { getShimScript } = await import(
 );
 
 const origin = 'https://proxy.example';
-const proxy = path => origin + '/' + encodeURIComponent('https://example.com') + path;
+const proxy = path => origin + '/~' + encodeURIComponent('https://example.com') + path;
 
 /** 只提供 shim 安装钩子所需的最小浏览器环境；shim 内部异常记入 errors。 */
 function createBrowser(globals = {}) {
@@ -37,7 +37,7 @@ function createBrowser(globals = {}) {
 		navigator: {},
 		location: {
 			href: proxy('/dir/page'), origin, protocol: 'https:', hostname: 'proxy.example', port: '',
-			pathname: '/' + encodeURIComponent('https://example.com') + '/dir/page', search: '',
+			pathname: '/~' + encodeURIComponent('https://example.com') + '/dir/page', search: '',
 		},
 		document: {
 			addEventListener() {},

@@ -11,7 +11,7 @@ const { rewriteImportMap, rewriteSpeculationRules, bufferedTextHandler } = await
 
 const base = 'https://example.com/assets/';
 const origin = 'https://proxy.example';
-const proxy = path => origin + '/' + encodeURIComponent('https://example.com') + path.split('/').map(encodeURIComponent).join('/');
+const proxy = path => origin + '/~' + encodeURIComponent('https://example.com') + path;
 const inlineJson = value => JSON.stringify(value).replace(/</g, '\\u003c');
 const payloads = [
 	['end tag', '</script><img src=x onerror=alert(1)>'],

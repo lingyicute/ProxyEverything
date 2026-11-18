@@ -30,7 +30,7 @@ async function proxyResponse(bytes, contentType, path, encoding) {
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async () => upstreamResponse(bytes, contentType, encoding);
 	try {
-		return await worker.fetch(new Request(origin + '/' + encodeURIComponent('https://site.example') + path), {
+		return await worker.fetch(new Request(origin + '/~' + encodeURIComponent('https://site.example') + path), {
 			ALLOWED_TARGET_ORIGINS: 'https://site.example',
 		});
 	} finally {
@@ -69,7 +69,7 @@ test('CSS exactly at the buffer limit is transformed rather than passed through'
 	assert.equal(response.headers.get('content-length'), null);
 	assert.equal(response.headers.get('etag'), null);
 	assert.ok((await response.text()).startsWith(
-		'@import "' + origin + '/https%3A%2F%2Fsite.example/assets/theme.css";'));
+		'@import "' + origin + '/~https%3A%2F%2Fsite.example/assets/theme.css";'));
 });
 
 test('small CSS is still decoded, rewritten and marked as a new representation', async () => {
@@ -82,7 +82,7 @@ test('small CSS is still decoded, rewritten and marked as a new representation',
 	}
 	const text = await response.text();
 	assert.ok(text.includes('content:"é"'));
-	assert.ok(text.includes('url("' + origin + '/https%3A%2F%2Fsite.example/assets/logo.png")'));
+	assert.ok(text.includes('url("' + origin + '/~https%3A%2F%2Fsite.example/assets/logo.png")'));
 });
 
 test('oversized decoded HTTP streams do not re-use the original encoded validators', async () => {

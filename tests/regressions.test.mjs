@@ -30,7 +30,7 @@ const base = 'https://example.com/dir/page';
 const origin = 'https://proxy.example';
 const proxy = (url) => {
 	const u = new URL(url, base);
-	return origin + '/' + encodeURIComponent(u.origin) + u.pathname.split('/').map(encodeURIComponent).join('/') + u.search + u.hash;
+	return origin + '/~' + encodeURIComponent(u.origin) + u.pathname + u.search + u.hash;
 };
 
 test('already-proxied URLs and inline CSS/JS/JSON never break out of raw-text or CDATA', () => {
@@ -154,9 +154,9 @@ test('homepage submit preserves percent-encoded plain URLs and rejects ws://', (
 		return { href: location.href, snack: snackEl.textContent || null };
 	};
 
-	assert.equal(submit('https://en.wikipedia.org/wiki/C%23').href, '/https%3A%2F%2Fen.wikipedia.org/wiki/C%2523');
-	assert.equal(submit('https://example.com/files/a%2Fb?x=1').href, '/https%3A%2F%2Fexample.com/files/a%252Fb?x=1');
-	assert.equal(submit(origin + '/https%3A%2F%2Fen.wikipedia.org/wiki/C%2523').href, '/https%3A%2F%2Fen.wikipedia.org/wiki/C%2523');
+	assert.equal(submit('https://en.wikipedia.org/wiki/C%23').href, '/~https%3A%2F%2Fen.wikipedia.org/wiki/C%23');
+	assert.equal(submit('https://example.com/files/a%2Fb?x=1').href, '/~https%3A%2F%2Fexample.com/files/a%2Fb?x=1');
+	assert.equal(submit(origin + '/https%3A%2F%2Fen.wikipedia.org/wiki/C%2523').href, '/~https%3A%2F%2Fen.wikipedia.org/wiki/C%23');
 	const wsRes = submit('ws://example.com/ws');
 	assert.equal(wsRes.href, origin + '/');
 	assert.equal(wsRes.snack, '仅支持 http:// 或 https:// 网址');
@@ -328,7 +328,7 @@ test('SVG scanner keeps declarations and exact XML element names intact', () => 
 	const nested = `<svg><style-note>url(label.txt)</style-note><image href="&icon;"/><image href="a&amp;b.png"/></svg>`;
 	const input = prolog + internalSubset + nested;
 	const expected = prolog.replace('iso-8859-1', 'UTF-8') + internalSubset +
-		nested.replace('href="a&amp;b.png"', `href="${proxy('a&b.png')}"`);
+		nested.replace('href="a&amp;b.png"', `href="${proxy('a&b.png').replace('&', '&amp;')}"`);
 	assert.equal(rewriteSvg(input, base, origin), expected);
 	assert.equal(rewriteSvg(`<svg><style>/* unfinished */`, base, origin), `<svg><style>/* unfinished */`);
 });
