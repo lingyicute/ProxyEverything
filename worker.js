@@ -969,6 +969,7 @@ function isCacheableMethod(m) { return m === 'GET' || m === 'HEAD'; }
  */
 function applyCachePolicy(response, request, ck) {
 	// 不把匿名缓存条目用于后来带凭证的请求；不能只在带凭证的响应上设置 no-store。
+	if (ck?.varyOnReferer) addVary(response.headers, 'Referer');
 	addVary(response.headers, 'Cookie');
 	addVary(response.headers, 'Authorization');
 	if (request && transformKind(response.headers, request)) addVary(response.headers, 'Cache-Control');
@@ -2767,7 +2768,8 @@ Disallow: /
 
 		// ---- 漏网的站内相对请求：innerHTML、location.href = '/x'、Worker 内请求、默认 /favicon.ico 等未经改写的地址
 		//      会直接落到代理域。路径不带协议而 Referer 是代理页面时，按来源页的目标站点还原并重定向 ----
-		if (!isProxiedPath(url.pathname) && !/^(?:https?|wss?):\/\//i.test(decodeProxyPath(url.pathname).trim().replace(/^\/+/, ''))) {
+		const usesRefererRoute = !isProxiedPath(url.pathname) && !/^(?:https?|wss?):\/\//i.test(decodeProxyPath(url.pathname).trim().replace(/^\/+/, ''));
+		if (usesRefererRoute) {
 			const refTarget = refererTarget(request, workerOrigin, env);
 			if (refTarget) {
 				const leaked = new URL(refTarget.origin + url.pathname + urlSuffix(url).split('#', 1)[0]);
@@ -2780,7 +2782,7 @@ Disallow: /
 
 		// ---- favicon 等杂项，避免被当成目标域名 ----
 		if (/^\/(favicon\.ico|sitemap\.xml|apple-touch-icon.*\.png|\.well-known\/.*)$/i.test(url.pathname)) {
-			return new Response(null, { status: 404 });
+			return new Response(null, { status: 404, headers: { 'Cache-Control': 'no-store' } });
 		}
 
 		// ---- 解析目标 URL ----
@@ -2801,6 +2803,7 @@ Disallow: /
 		// 本请求的 cookie 来源作用域（WebSocket 与其对应 HTTP 来源共享）
 		const ck = {
 			ns: cookieNamespace(targetUrl),
+			varyOnReferer: usesRefererRoute,
 			isHttps: url.protocol === 'https:' && ['https:', 'wss:'].includes(targetUrl.protocol),
 		};
 

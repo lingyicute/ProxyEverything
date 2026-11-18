@@ -223,3 +223,16 @@ test('WebSocket bridge forwards binary frames and confirms each half of a close'
 	assert.deepEqual(client.closes, [[4000, 'done']]);
 	assert.deepEqual(upstream.closes, [[4000, 'done']]);
 });
+
+test('bare target paths vary on the Referer that selects the route', async () => {
+	const alias = origin + '/example.com/logo.png';
+	const direct = await send(alias);
+	assert.equal(direct.status, 200);
+	assert.match(direct.headers.get('Vary'), /\bReferer\b/i);
+	const recovered = await send(alias, { headers: { referer } });
+	assert.equal(recovered.status, 307);
+	assert.equal(recovered.headers.get('cache-control'), 'no-store');
+	const missing = await send(origin + '/favicon.ico');
+	assert.equal(missing.status, 404);
+	assert.equal(missing.headers.get('cache-control'), 'no-store');
+});
