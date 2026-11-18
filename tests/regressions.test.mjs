@@ -321,3 +321,14 @@ test('upstream access requires a valid explicit origin allowlist', async () => {
 		globalThis.fetch = originalFetch;
 	}
 });
+
+test('SVG scanner keeps declarations and exact XML element names intact', () => {
+	const prolog = `<?xml version="1.0" encoding="iso-8859-1"?>`;
+	const internalSubset = `<!DOCTYPE svg [<!-- ] > --> <!ENTITY icon 'sprite.svg'>]>`;
+	const nested = `<svg><style-note>url(label.txt)</style-note><image href="&icon;"/><image href="a&amp;b.png"/></svg>`;
+	const input = prolog + internalSubset + nested;
+	const expected = prolog.replace('iso-8859-1', 'UTF-8') + internalSubset +
+		nested.replace('href="a&amp;b.png"', `href="${proxy('a&b.png')}"`);
+	assert.equal(rewriteSvg(input, base, origin), expected);
+	assert.equal(rewriteSvg(`<svg><style>/* unfinished */`, base, origin), `<svg><style>/* unfinished */`);
+});

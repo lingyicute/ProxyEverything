@@ -2240,129 +2240,151 @@ function rewriteSpeculationRules(text, baseUrl, workerOrigin, docUrl = baseUrl) 
 }
 
 function isValidXmlCodePoint(code) {
-	return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff) && code !== 0xfffe && code !== 0xffff;
+	return code === 9 || code === 10 || code === 13 || (code >= 0x20 && code <= 0xd7ff) ||
+		(code >= 0xe000 && code <= 0xfffd) || (code >= 0x10000 && code <= 0x10ffff);
 }
 
 function decodeXmlEntities(s) {
-	return String(s).replace(/&(?:#(\d+)|#x([0-9a-f]+)|(amp|lt|gt|quot|apos));/gi, (m, dec, hex, named) => {
-		if (dec) {
-			const code = parseInt(dec, 10);
+	return String(s).replace(/&(?:#(\d+)|#x([0-9a-fA-F]+)|(amp|lt|gt|quot|apos));/g, (m, dec, hex, named) => {
+		if (dec || hex) {
+			const code = dec ? Number(dec) : parseInt(hex, 16);
 			return isValidXmlCodePoint(code) ? String.fromCodePoint(code) : m;
 		}
-		if (hex) {
-			const code = parseInt(hex, 16);
-			return isValidXmlCodePoint(code) ? String.fromCodePoint(code) : m;
-		}
-		switch (named.toLowerCase()) {
-			case 'amp': return '&';
-			case 'lt': return '<';
-			case 'gt': return '>';
-			case 'quot': return '"';
-			case 'apos': return "'";
-		}
-		return m;
+		return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[named];
 	});
 }
 
-function escapeXmlAttr(s) {
-	return String(s).replace(/[&"<>]/g, c => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[c]));
+function hasCustomXmlEntity(s) {
+	return /&(?!(?:amp|lt|gt|quot|apos);)[^\s&#;<>]+;/.test(s);
 }
 
-/** 独立 SVG 文档：重写引用属性与内嵌样式，保持 XML 实体良构性 */
-function rewriteSvg(svg, baseUrl, workerOrigin) {
-	const rw = (v) => rewriteUrl(v, baseUrl, workerOrigin);
-	// 每个替换都先用第一分支整体吞掉其它属性的引号值：否则 onclick="location.href='/x'" 这类值内部
-	// 形似属性的文本也会被改写，并把双引号写进双引号属性值里，破坏 XML 良构性（整张 SVG 无法渲染）。
-	const rewriteTagAttrs = (tag) => {
-		let out = tag;
-		if (/^<(?:[a-z0-9_-]+:)?(?:script|link)\b/i.test(out)) {
-			out = out.replace(/"[^"]*"|'[^']*'|\s+integrity\s*=\s*(?:"[^"]*"|'[^']*')/gi, m => (/^\s/.test(m) ? '' : m));
+function escapeXmlAttr(s) {
+	return String(s).replace(/[&"<>\t\n\r]/g, c => ({
+		'&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;', '\t': '&#9;', '\n': '&#10;', '\r': '&#13;',
+	}[c]));
+}
+
+const XML_ATTR = /([ \t\n\r])([^\s"'<>\/=]+)(\s*=\s*)(?:"([^"]*)"|'([^']*)')/g;
+const XML_REFERENCE_ATTRS = new Set(['href', 'xlink:href', 'src', 'action', 'formaction', 'poster']);
+const SVG_CSS_ATTRS = new Set(['style', 'fill', 'stroke', 'filter', 'clip-path', 'mask', 'marker', 'marker-start', 'marker-mid', 'marker-end', 'cursor']);
+
+/** 顺序读 XML 标记，避免在未闭合的标签、注释或 CDATA 上反复回溯。 */
+function readXmlMarkup(source, start) {
+	for (const [open, close, kind] of [['<!--', '-->', 'comment'], ['<![CDATA[', ']]>', 'cdata'], ['<?', '?>', 'pi']]) {
+		if (source.startsWith(open, start)) {
+			const end = source.indexOf(close, start + open.length);
+			return end < 0 ? { end: source.length } : { end: end + close.length, kind };
 		}
-		return out
-			.replace(
-				/"[^"]*"|'[^']*'|(?<![\w:-])(href|xlink:href|src|action|formaction|poster)\s*=\s*("([^"]*)"|'([^']*)')/gi,
-				(m, attr, _q, dq, sq) => {
-					if (!attr) return m;
-					const raw = dq !== undefined ? dq : sq;
-					const r = rw(decodeXmlEntities(raw));
-					return `${attr}="${escapeXmlAttr(r)}"`;
-				}
-			)
-			.replace(
-				/"[^"]*"|'[^']*'|(?<![\w:-])(srcset|imagesrcset)\s*=\s*("([^"]*)"|'([^']*)')/gi,
-				(m, attr, _q, dq, sq) => {
-					if (!attr) return m;
-					const raw = dq !== undefined ? dq : sq;
-					const r = rewriteSrcset(decodeXmlEntities(raw), baseUrl, workerOrigin);
-					return `${attr}="${escapeXmlAttr(r)}"`;
-				}
-			)
-			.replace(
-				/"[^"]*"|'[^']*'|(?<![\w:-])ping\s*=\s*("([^"]*)"|'([^']*)')/gi,
-				(m, q, dq, sq) => {
-					if (!q) return m;
-					const raw = dq !== undefined ? dq : sq;
-					const trimmed = decodeXmlEntities(raw).trim();
-					if (!trimmed) return m;
-					return `ping="${escapeXmlAttr(trimmed.split(/\s+/).map(rw).join(' '))}"`;
-				}
-			)
-			.replace(
-				/"[^"]*"|'[^']*'|(?<![\w:-])(style|fill|stroke|filter|clip-path|mask|marker(?:-start|-mid|-end)?|cursor)\s*=\s*("([^"]*)"|'([^']*)')/gi,
-				(m, attr, _q, dq, sq) => {
-					if (!attr) return m;
-					const raw = dq !== undefined ? dq : sq;
-					const decoded = decodeXmlEntities(raw);
-					const rewritten = rewriteStyleAttr(decoded, baseUrl, workerOrigin);
-					if (rewritten === decoded) return m;
-					return `${attr}="${escapeXmlAttr(rewritten)}"`;
-				}
-			);
-	};
-	const rewriteXmlText = (body, transform) => {
-		const rewritePart = part => transform(decodeXmlEntities(part))
-			.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/]]>/g, ']]&gt;');
-		if (!body.includes('<![CDATA[') && !body.includes('<!--')) return rewritePart(body);
-		let out = '';
-		let last = 0;
-		for (const cm of body.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->/g)) {
-			if (cm.index > last) out += rewritePart(body.slice(last, cm.index));
-			out += cm[1] !== undefined ? `<![CDATA[${transform(cm[1])}]]>` : cm[0];
-			last = cm.index + cm[0].length;
+	}
+	const declaration = source.startsWith('<!', start);
+	let level = 0;
+	let quote = '';
+	for (let i = start + 1; i < source.length; i++) {
+		const ch = source[i];
+		if (quote) {
+			if (ch === quote) quote = '';
+		} else if (ch === '"' || ch === "'") {
+			quote = ch;
+		} else if (ch === '<' && !declaration) {
+			return { end: i }; // 下一处标记仍独立处理
+		} else if (declaration && source.startsWith('<!--', i)) {
+			const end = source.indexOf('-->', i + 4);
+			if (end < 0) break;
+			i = end + 2;
+		} else if (declaration && source.startsWith('<?', i)) {
+			const end = source.indexOf('?>', i + 2);
+			if (end < 0) break;
+			i = end + 1;
+		} else if (declaration && ch === '[') {
+			level++;
+		} else if (declaration && ch === ']' && level > 0) {
+			level--;
+		} else if (ch === '>' && level === 0) {
+			return { end: i + 1, kind: declaration ? 'declaration' : 'tag' };
 		}
-		if (last < body.length) out += rewritePart(body.slice(last));
-		return out;
+	}
+	return { end: source.length };
+}
+
+function readXmlTextEnd(source, start, qualifiedName) {
+	let i = start;
+	while ((i = source.indexOf('<', i)) !== -1) {
+		if (source.startsWith('</' + qualifiedName, i)) {
+			let end = i + 2 + qualifiedName.length;
+			while (/[ \t\n\r]/.test(source[end] || '')) end++;
+			if (source[end] === '>') return { start: i, end: end + 1 };
+		}
+		if (!source.startsWith('<!--', i) && !source.startsWith('<![CDATA[', i)) return null;
+		const markup = readXmlMarkup(source, i);
+		if (!markup.kind) return null;
+		i = markup.end;
+	}
+	return null;
+}
+
+function rewriteXmlText(body, transform) {
+	const rewritePart = (part) => {
+		if (hasCustomXmlEntity(part)) return part;
+		const decoded = decodeXmlEntities(part);
+		const out = transform(decoded);
+		return out === decoded ? part : out.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/]]>/g, ']]&gt;');
 	};
-	const isInlineModuleTag = (openTag) => {
+	let out = '';
+	let last = 0;
+	for (const cm of body.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->/g)) {
+		out += rewritePart(body.slice(last, cm.index));
+		out += cm[1] === undefined ? cm[0] : `<![CDATA[${transform(cm[1]).replace(/]]>/g, ']]]]><![CDATA[>')}]]>`;
+		last = cm.index + cm[0].length;
+	}
+	return out + rewritePart(body.slice(last));
+}
+
+/** 独立 SVG 文档：重写引用属性和样式，保留不理解的 XML 声明与实体。 */
+function rewriteSvg(source, baseUrl, workerOrigin) {
+	const rw = v => rewriteUrl(v, baseUrl, workerOrigin);
+	const out = [];
+	let cursor = 0;
+	for (let start; (start = source.indexOf('<', cursor)) !== -1;) {
+		out.push(source.slice(cursor, start));
+		const { end, kind } = readXmlMarkup(source, start);
+		const tag = source.slice(start, end);
+		cursor = end;
+		const qualifiedName = kind === 'tag' ? /^<([^\s\/>]+)(?=[\s\/>])/.exec(tag)?.[1] : null;
+		const localName = qualifiedName?.split(':').pop();
+		const stylesheet = kind === 'pi' && /^<\?xml-stylesheet[ \t\n\r]/.test(tag);
+		if (kind === 'pi' && /^<\?xml[ \t\n\r]/.test(tag)) {
+			out.push(tag.replace(XML_ATTR, (m, space, name) => name === 'encoding' ? `${space}encoding="UTF-8"` : m));
+			continue;
+		}
+		if (!localName && !stylesheet) { out.push(tag); continue; }
+		let type;
 		let hasRef = false;
-		let type = null;
-		for (const am of openTag.matchAll(/"[^"]*"|'[^']*'|(?<![\w:-])([a-z][a-z0-9_:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`/]+))/gi)) {
-			if (!am[1]) continue;
-			const name = am[1].toLowerCase();
+		out.push(tag.replace(XML_ATTR, (m, space, name, equals, dq, sq) => {
+			const raw = dq ?? sq;
+			if (name === 'type' && type === undefined) type = decodeXmlEntities(raw).trim().toLowerCase();
 			if (name === 'src' || name === 'href' || name === 'xlink:href') hasRef = true;
-			else if (name === 'type' && type === null) type = decodeXmlEntities(am[2] ?? am[3] ?? am[4] ?? '').trim().toLowerCase();
+			if (name === 'integrity' && (localName === 'script' || localName === 'link')) return '';
+			if (hasCustomXmlEntity(raw)) return m;
+			const decoded = decodeXmlEntities(raw);
+			let next;
+			if (XML_REFERENCE_ATTRS.has(name)) next = rw(decoded);
+			else if (name === 'srcset' || name === 'imagesrcset') next = rewriteSrcset(decoded, baseUrl, workerOrigin);
+			else if (name === 'ping' && decoded.trim()) next = decoded.trim().split(/\s+/).map(rw).join(' ');
+			else if (SVG_CSS_ATTRS.has(name)) next = rewriteStyleAttr(decoded, baseUrl, workerOrigin);
+			return next === undefined || next === decoded ? m : `${space}${name}${equals}"${escapeXmlAttr(next)}"`;
+		}));
+		if (tag.endsWith('/>')) continue;
+		const rewrite = localName === 'style' ? rewriteCss : localName === 'script' && !hasRef && type === 'module' ? rewriteJsModuleSpecifiers : null;
+		if (!rewrite) continue;
+		const close = readXmlTextEnd(source, cursor, qualifiedName);
+		if (close) {
+			out.push(rewriteXmlText(source.slice(cursor, close.start), part => rewrite(part, baseUrl, workerOrigin)),
+				source.slice(close.start, close.end));
+			cursor = close.end;
 		}
-		return !hasRef && type === 'module';
-	};
-	return String(svg).replace(
-		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|(<((?:[a-z0-9_-]+:)?style)\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)((?:<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]|<(?!\/\2\s*>))*)(<\/\2\s*>)|(<((?:[a-z0-9_-]+:)?script)\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>)((?:<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]|<(?!\/\6\s*>))*)(<\/\6\s*>)|<[?a-zA-Z](?:[^>"']|"[^"]*"|'[^']*')*>/gi,
-		(m, styleOpen, _styleTag, css, styleClose, scriptOpen, _scriptTag, scriptBody, scriptClose) => {
-			if (styleOpen) {
-				const open = rewriteTagAttrs(styleOpen);
-				return open + rewriteXmlText(css, part => rewriteCss(part, baseUrl, workerOrigin)) + styleClose;
-			}
-			if (scriptOpen) {
-				const open = rewriteTagAttrs(scriptOpen);
-				if (!isInlineModuleTag(scriptOpen)) return open + scriptBody + scriptClose;
-				return open + rewriteXmlText(scriptBody, part => rewriteJsModuleSpecifiers(part, baseUrl, workerOrigin)) + scriptClose;
-			}
-			if (m.startsWith('<!--') || m.startsWith('<![CDATA[')) return m;
-			if (/^<\?xml(?![\w:-])/i.test(m)) {
-				return m.replace(/(?<![\w:-])encoding\s*=\s*("[^"]*"|'[^']*')/i, 'encoding="UTF-8"');
-			}
-			return rewriteTagAttrs(m);
-		}
-	);
+	}
+	out.push(source.slice(cursor));
+	return out.join('');
 }
 
 /** Manifest：解析 JSON，仅改写规范中的 URL 字段，不触碰名称/键/任意业务字符串。 */
