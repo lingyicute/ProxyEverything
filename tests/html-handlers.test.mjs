@@ -58,7 +58,24 @@ test('html: URL attributes are only written back when the rewrite changes them',
 	const link = run('a', { href: '/x', ping: '/p' });
 	assert.equal(link.getAttribute('href'), proxy('/x'));
 	assert.equal(link.getAttribute('ping'), proxy('/p'));
-	assert.equal(run('form', { action: '' }).getAttribute('action'), proxy('/dir/page'));
+	assert.equal(run('form', { action: '' }).getAttribute('action'), '');
 	assert.equal(run('button', { formaction: '', formmethod: 'dialog' }).getAttribute('formaction'), '');
-	assert.equal(run('button', { formaction: '' }).getAttribute('formaction'), proxy('/dir/page'));
+	assert.equal(run('button', { formaction: '' }).getAttribute('formaction'), '');
+});
+
+test('HTML base affects anchor fragments, but not absent or empty form actions', () => {
+	const handlers = collectHandlers();
+	handlers.base[0].element(element('base', { href: '/other/' }));
+	for (const [tag, attrs, key, expected] of [
+		['a', { href: '#heading' }, 'href', proxy('/other/#heading')],
+		['a', { href: '' }, 'href', proxy('/other/')],
+		['form', {}, 'action', null],
+		['form', { action: '' }, 'action', ''],
+		['form', { action: 'finish' }, 'action', proxy('/other/finish')],
+		['button', { formaction: '' }, 'formaction', ''],
+	]) {
+		const el = element(tag, attrs);
+		for (const h of handlers[tag]) h.element(el);
+		assert.equal(el.getAttribute(key), expected);
+	}
 });
