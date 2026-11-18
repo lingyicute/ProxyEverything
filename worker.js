@@ -2886,7 +2886,13 @@ Disallow: /
 		if ([204, 205, 304].includes(upstream.status) || request.method === 'HEAD') {
 			const resp = buildResponse(upstream, request, ck, fetchUrl);
 			if (resp.body) resp.body.cancel().catch(() => {});
-			// HEAD/304 可以合法携带所选表示的长度与验证器，不按正文变换清洗。
+			// 这些字段描述的是原始字节；没有正文时无法判断是否触发大小限制，
+			// 因而不能冒充下游 GET 的长度、编码、摘要或验证器。
+			if (![204, 205, 206].includes(upstream.status) && transformKind(upstream.headers, request) &&
+				!hasNoTransform(request.headers.get('Cache-Control'))) {
+				stripTransformedHeaders(resp.headers);
+				resp.headers.delete('Content-Type'); // 最终 charset 依赖正文嗅探与透传判定
+			}
 			return new Response(null, resp);
 		}
 

@@ -169,3 +169,25 @@ test('authenticated redirects stay within the original target origin', async t =
 		if (status === 502) assert.equal(r.headers.get('Cache-Control'), 'no-store');
 	}
 });
+
+test('bodyless responses do not advertise source metadata for a rewritten GET', async t => {
+	const target = 'https://example.com/asset';
+	let upstream;
+	t.mock.method(globalThis, 'fetch', () => upstream);
+	for (const [method, status, type, policy, intact] of [
+		['HEAD', 200, 'text/css', '', false], ['GET', 304, 'text/html', '', false],
+		['HEAD', 200, 'image/png', '', true], ['HEAD', 200, 'text/css', 'no-transform', true],
+		['HEAD', 206, 'text/css', '', true],
+	]) {
+		upstream = new Response(null, { status, headers: {
+			'content-type': type, 'content-length': '99', etag: '"source"', 'content-encoding': 'gzip',
+		} });
+		const r = await worker.fetch(new Request(proxy(target), { method, headers: { 'cache-control': policy } }),
+			{ ALLOWED_TARGET_ORIGINS: new URL(target).origin });
+		assert.equal(r.status, status);
+		assert.equal(r.body, null);
+		for (const field of ['content-type', 'content-length', 'content-encoding', 'etag']) {
+			assert.equal(r.headers.get(field), intact ? upstream.headers.get(field) : null, field);
+		}
+	}
+});
