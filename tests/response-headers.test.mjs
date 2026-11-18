@@ -76,3 +76,15 @@ test('JSON variants vary on the manifest destination in both forwarding paths', 
 		assert.equal((await response.json()).start_url, dest === 'manifest' ? proxy('https://example.com/home') : '/home');
 	}
 });
+
+test('Set-Cookie fields retain separate values and commas within Expires', async () => {
+	const headers = new Headers({ 'content-type': 'text/plain' });
+	headers.append('set-cookie', 'first=one; Expires=Wed, 01 Jan 2031 00:00:00 GMT');
+	headers.append('set-cookie', 'second=two; HttpOnly');
+	const response = await fetchThrough('https://example.com/state', headers);
+	const values = response.headers.getSetCookie();
+	assert.equal(values.length, 2);
+	assert.match(values[0], /_first=one; Expires=Wed, 01 Jan 2031 00:00:00 GMT/);
+	assert.match(values[1], /_second=two; HttpOnly/);
+	assert.equal(response.headers.get('Cache-Control'), 'no-store');
+});
