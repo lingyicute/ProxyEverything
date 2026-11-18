@@ -574,7 +574,7 @@ function cookieNamespace(targetUrl) {
 
 /**
  * 改写上游 Set-Cookie：加命名空间前缀、强制 Path=/、去掉 Domain，
- * 并按 Worker 自身协议修正 Secure / SameSite。
+ * 确保 Secure / SameSite=None / Partitioned 不会被降级。
  * 返回 null 表示这条 cookie 无效、应丢弃。
  */
 function scopeSetCookie(c, ns, workerIsHttps) {
@@ -598,13 +598,14 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 		// Domain / Path 一律由我们接管
 		if (attr === 'domain' || attr === 'path') continue;
 		if (attr === 'secure') {
-			// Worker 跑在 http 上时保留 Secure 会让浏览器直接丢弃这条 cookie
-			if (workerIsHttps && !hasSecure) { out.push('Secure'); hasSecure = true; }
+			if (!workerIsHttps) return null;
+			if (!hasSecure) { out.push('Secure'); hasSecure = true; }
 			continue;
 		}
 		if (attr === 'partitioned') {
-			// CHIPS Partitioned 属性同样要求 Secure，HTTP 下必须剥除
-			if (workerIsHttps && !hasPartitioned) { out.push('Partitioned'); hasPartitioned = true; sameSiteNone = true; }
+			// CHIPS 同样要求 Secure；必须拒绝整条 Cookie，而非扩大作用域。
+			if (!workerIsHttps) return null;
+			if (!hasPartitioned) { out.push('Partitioned'); hasPartitioned = true; sameSiteNone = true; }
 			continue;
 		}
 		if (attr === 'samesite') {
@@ -616,7 +617,8 @@ function scopeSetCookie(c, ns, workerIsHttps) {
 			if (!val) continue;
 			const isNone = val.toLowerCase() === 'none';
 			sameSiteNone = sameSiteNone || isNone;
-			if (!isNone || workerIsHttps) out.push(`SameSite=${val}`);
+			if (isNone && !workerIsHttps) return null;
+			out.push(`SameSite=${val}`);
 			continue;
 		}
 		out.push(part);
@@ -1382,7 +1384,7 @@ if(CK){
         return out.join('; ');
       },
       set:function(v){
-        var scoped=scopeCookie(v,CK,location.protocol==='https:');
+        var scoped=scopeCookie(v,CK,location.protocol==='https:'&&new URL(currentTarget()).protocol==='https:');
         if(scoped===null)return;
         return CD.set.call(this,scoped);
       }
@@ -2792,7 +2794,10 @@ Disallow: /
 		}
 
 		// 本请求的 cookie 来源作用域（WebSocket 与其对应 HTTP 来源共享）
-		const ck = { ns: cookieNamespace(targetUrl), isHttps: url.protocol === 'https:' };
+		const ck = {
+			ns: cookieNamespace(targetUrl),
+			isHttps: url.protocol === 'https:' && ['https:', 'wss:'].includes(targetUrl.protocol),
+		};
 
 		// WebSocket 请求走独立通道
 		if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {

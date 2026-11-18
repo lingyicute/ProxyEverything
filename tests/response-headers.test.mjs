@@ -97,3 +97,14 @@ test('upstream source variants retain Referer in the downstream cache key', asyn
 		assert.ok(response.headers.get('vary').toLowerCase().split(/,\s*/).includes(field));
 	}
 });
+
+test('HTTP upstreams do not turn secure cookies into ordinary cookies', async () => {
+	const headers = new Headers({ 'content-type': 'text/plain' });
+	for (const value of ['tls=1; Secure', 'partition=2; Partitioned', 'cross=3; SameSite=None', 'plain=4']) {
+		headers.append('set-cookie', value);
+	}
+	const response = await fetchThrough('http://example.com/state', headers);
+	const values = response.headers.getSetCookie();
+	assert.equal(values.length, 1);
+	assert.match(values[0], /_plain=4; Path=\//);
+});
