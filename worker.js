@@ -2291,7 +2291,7 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 		map.imports = rewriteSpecMap(map.imports);
 	}
 	if (map.scopes && typeof map.scopes === 'object' && !Array.isArray(map.scopes)) {
-		const nextScopes = {};
+		const nextScopes = Object.create(null);
 		for (const [scopeKey, specMap] of Object.entries(map.scopes)) {
 			// 作用域前缀同样是文档基地址下的 URL，必须与被代理的模块 URL 使用同一种形式。
 			nextScopes[rewriteUrl(scopeKey, baseUrl, workerOrigin)] = rewriteSpecMap(specMap);
