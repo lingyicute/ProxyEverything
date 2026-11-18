@@ -2892,7 +2892,7 @@ Disallow: /
 		}
 
 		// ---- 重定向 ----
-		if (REDIRECT_STATUS.has(upstream.status)) {
+		if (REDIRECT_STATUS.has(upstream.status) && upstream.headers.get('Location')) {
 			const resp = buildResponse(upstream, request, ck, fetchUrl);
 			// 丢弃重定向正文时显式取消上游流，且原正文长度/编码/摘要不再有效。
 			if (resp.body) resp.body.cancel().catch(() => {});

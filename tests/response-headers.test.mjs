@@ -230,3 +230,10 @@ test('created resources expose a usable proxy Location without discarding their 
 	assert.equal(r.headers.get('location'), proxy(target) + 'item%2F1?');
 	assert.equal(await r.text(), 'created');
 });
+
+test('redirect status without a Location keeps the explanatory representation', async t => {
+	t.mock.method(globalThis, 'fetch', () => new Response('Choose a new address.', { status: 302 }));
+	const r = await worker.fetch(new Request(proxy('https://example.com/old')), { ALLOWED_TARGET_ORIGINS: 'https://example.com' });
+	assert.equal(r.status, 302);
+	assert.equal(await r.text(), 'Choose a new address.');
+});
