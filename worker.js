@@ -98,9 +98,20 @@ function stripHopByHop(headers) {
  * 原样保留又会跳出代理，因此按目标地址改写后写回。
  */
 function stripResponseHeaders(headers, request, baseUrl) {
-	const refresh = request && baseUrl ? headers.get('refresh') : null;
+	const refresh = headers.get('refresh');
 	for (const h of STRIP_RESPONSE_HEADERS) headers.delete(h);
-	if (refresh) headers.set('Refresh', rewriteRefreshContent(refresh, baseUrl, new URL(request.url).origin));
+	if (!request || !baseUrl) return;
+	const origin = new URL(request.url).origin;
+	if (refresh) headers.set('Refresh', rewriteRefreshContent(refresh, baseUrl, origin));
+	// Location 也用于 201 等非重定向响应；调用方应看到代理资源地址。
+	const location = headers.get('Location');
+	if (location) {
+		try {
+			const target = new URL(location, baseUrl);
+			if (!['http:', 'https:'].includes(target.protocol)) throw new Error();
+			headers.set('Location', rewriteUrl(target.href, baseUrl, origin));
+		} catch { headers.delete('Location'); }
+	}
 }
 
 function stripTransformedHeaders(headers) {
@@ -2883,25 +2894,6 @@ Disallow: /
 		// ---- 重定向 ----
 		if (REDIRECT_STATUS.has(upstream.status)) {
 			const resp = buildResponse(upstream, request, ck, fetchUrl);
-			const loc = upstream.headers.get('location');
-			if (loc) {
-				try {
-					const abs = new URL(loc, fetchUrl);
-					if (!['http:', 'https:'].includes(abs.protocol)) throw new Error('无效重定向协议');
-					if (isWorkerHost(abs, workerOrigin)) {
-						if (isProxiedPath(abs.pathname)) {
-							resp.headers.set('Location', `${workerOrigin}${abs.pathname}${urlSuffix(abs)}`);
-						} else {
-							const rebound = new URL(targetUrl.origin + abs.pathname + urlSuffix(abs));
-							resp.headers.set('Location', toProxyUrl(rebound.href, workerOrigin));
-						}
-					} else {
-						resp.headers.set('Location', toProxyUrl(abs.href, workerOrigin));
-					}
-				} catch {
-					resp.headers.delete('Location');
-				}
-			}
 			// 丢弃重定向正文时显式取消上游流，且原正文长度/编码/摘要不再有效。
 			if (resp.body) resp.body.cancel().catch(() => {});
 			// 浏览器只看到同一个代理源，不会像真正的跨源重定向那样删除 Authorization。

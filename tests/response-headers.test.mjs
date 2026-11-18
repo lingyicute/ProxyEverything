@@ -221,3 +221,12 @@ test('cacheable scripts vary on both service-worker request markers', async () =
 		assert.ok(vary.includes('sec-fetch-dest'));
 	}
 });
+
+test('created resources expose a usable proxy Location without discarding their body', async t => {
+	const target = 'https://example.com/items/';
+	t.mock.method(globalThis, 'fetch', () => new Response('created', { status: 201, headers: { location: 'item%2F1?' } }));
+	const r = await worker.fetch(new Request(proxy(target), { method: 'POST' }), { ALLOWED_TARGET_ORIGINS: new URL(target).origin });
+	assert.equal(r.status, 201);
+	assert.equal(r.headers.get('location'), proxy(target) + 'item%2F1?');
+	assert.equal(await r.text(), 'created');
+});
