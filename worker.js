@@ -644,12 +644,11 @@ function scopeRequestCookie(header, ns) {
 
 /** 就地重写 Headers 上的全部 Set-Cookie */
 function rescopeSetCookies(headers, ns, workerIsHttps) {
-	// getSetCookie 才能拿到多条 Set-Cookie；退化成 get 时只会有一条
-	const list = headers.getSetCookie
-		? headers.getSetCookie()
-		: (headers.get('set-cookie') ? [headers.get('set-cookie')] : []);
-	if (!list.length) return;
-	headers.delete('set-cookie');
+	// Workers 的标准 API 可能尚不可用，但 getAll('Set-Cookie') 保留独立的字段。
+	// 不读合并后的 get()：Expires 自身含逗号，无法安全地靠分隔符还原。
+	const list = typeof headers.getSetCookie === 'function' ? headers.getSetCookie()
+		: typeof headers.getAll === 'function' ? headers.getAll('Set-Cookie') : [];
+	headers.delete('Set-Cookie');
 	for (const c of list) {
 		const scoped = scopeSetCookie(c, ns, workerIsHttps);
 		if (scoped) headers.append('Set-Cookie', scoped);
