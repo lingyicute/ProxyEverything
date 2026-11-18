@@ -1275,6 +1275,7 @@ try{
   }
 }catch(e){}
 /* setAttribute / setAttributeNS 兜底（src/srcset/imagesrcset/action/formaction/poster/data/href/xlink:href/ping） */
+var XLINK_NS='http://www.w3.org/1999/xlink';
 var ATTRS={src:0,srcset:1,imagesrcset:1,action:0,formaction:0,poster:0,data:0,href:0,'xlink:href':0,ping:2};
 var HREF_TAGS={A:1,LINK:1,AREA:1,SCRIPT:1,IMAGE:1,USE:1,FEIMAGE:1,MPATH:1,TEXTPATH:1,PATTERN:1,FILTER:1,LINEARGRADIENT:1,RADIALGRADIENT:1};
 /* 与服务端 HANDLERS 一致：data/action/formaction 等是常见的业务属性名，只在会据此加载资源的元素上改写 */
@@ -1340,12 +1341,13 @@ if(window.Element){
   };
   var oSANS=Element.prototype.setAttributeNS;
   if(oSANS)Element.prototype.setAttributeNS=function(ns,n,v){
+    if(typeof n!=='string')return oSANS.apply(this,arguments);
+    if(ns===XLINK_NS){
+      if(n.slice(n.lastIndexOf(':')+1)!=='href')return oSANS.apply(this,arguments);
+    }else if((ns!=null&&ns!=='')||n.indexOf(':')>=0)return oSANS.apply(this,arguments);
     try{
-      if(typeof n==='string'&&v!=null){
-        var ln=n.toLowerCase();
-        var colon=ln.indexOf(':');
-        var prefix=colon>=0?ln.slice(0,colon):'';
-        var local=colon>=0?(prefix==='xlink'||ns?ln.slice(colon+1):ln):ln;
+      if(v!=null){
+        var local=ns===XLINK_NS?'xlink:href':n;
         var sv=v instanceof URL?v.href:String(v);
         var tag=normTag(this);
         if(local==='integrity'&&(tag==='SCRIPT'||tag==='LINK')){
@@ -1381,12 +1383,8 @@ if(window.Element){
   };
   if(oRANS)Element.prototype.removeAttributeNS=function(ns,n){
     try{
-      if(typeof n==='string'){
-        var ln=n.toLowerCase();
-        var local=ln.indexOf(':')>=0?ln.slice(ln.indexOf(':')+1):ln;
-        if(local==='href'&&normTag(this)==='BASE'&&oRA){
-          oRA.call(this,'data-pe-base');
-        }
+      if((ns==null||ns==='')&&n==='href'&&normTag(this)==='BASE'&&oRA){
+        oRA.call(this,'data-pe-base');
       }
     }catch(e){}
     return oRANS.apply(this,arguments);
@@ -1426,7 +1424,6 @@ if(CK){
 }
 }catch(e){}
 /* ---- 链接点击与表单提交兜底（覆盖 innerHTML 动态插入节点与编程式 submit） ---- */
-var XLINK_NS='http://www.w3.org/1999/xlink';
 function rwLinkEv(ev){
   try{
     var t=ev.target;

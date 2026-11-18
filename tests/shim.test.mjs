@@ -177,3 +177,18 @@ test('document.cookie shares protected cookie names without accepting HTTP-only 
 	ctx.document.cookie = '__Host-pref=two; Secure; Path=/';
 	assert.equal(last, `__Host-${ns}pref=two; Secure; Path=/`);
 });
+
+test('namespaced metadata is not mistaken for a native loading attribute', () => {
+	const { ctx } = createBrowser();
+	const a = new ctx.Element('a');
+	a.setAttributeNS('urn:metadata', 'meta:href', '/label');
+	assert.equal(a.getAttribute('meta:href'), '/label');
+	const base = new ctx.Element('base');
+	base.setAttribute('href', '/assets/');
+	base.setAttributeNS('urn:metadata', 'meta:href', 'title');
+	base.removeAttributeNS('urn:metadata', 'href');
+	assert.equal(base.getAttribute('data-pe-base'), 'https://example.com/assets/');
+	const link = new ctx.Element('use');
+	link.setAttributeNS('http://www.w3.org/1999/xlink', 'ref:href', 'sprite.svg');
+	assert.equal(link.getAttribute('ref:href'), proxy('/dir/sprite.svg'));
+});
