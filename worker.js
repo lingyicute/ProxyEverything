@@ -2502,14 +2502,20 @@ function rewriteXmlText(body, transform) {
 
 /** 独立 SVG 文档：重写引用属性和样式，保留不理解的 XML 声明与实体。 */
 function rewriteSvg(source, baseUrl, workerOrigin) {
-	const rw = v => rewriteUrl(v, baseUrl, workerOrigin);
 	const out = [];
+	const scopes = [{ name: null, base: baseUrl }];
 	let cursor = 0;
 	for (let start; (start = source.indexOf('<', cursor)) !== -1;) {
 		out.push(source.slice(cursor, start));
 		const { end, kind } = readXmlMarkup(source, start);
 		const tag = source.slice(start, end);
 		cursor = end;
+		const closingName = kind === 'tag' ? /^<\/([^\s\/>]+)[ \t\n\r]*>/.exec(tag)?.[1] : null;
+		if (closingName) {
+			if (scopes.length > 1 && scopes[scopes.length - 1].name === closingName) scopes.pop();
+			out.push(tag);
+			continue;
+		}
 		const qualifiedName = kind === 'tag' ? /^<([^\s\/>]+)(?=[\s\/>])/.exec(tag)?.[1] : null;
 		const localName = qualifiedName?.split(':').pop();
 		const stylesheet = kind === 'pi' && /^<\?xml-stylesheet[ \t\n\r]/.test(tag);
@@ -2518,6 +2524,20 @@ function rewriteSvg(source, baseUrl, workerOrigin) {
 			continue;
 		}
 		if (!localName && !stylesheet) { out.push(tag); continue; }
+		let elementBase = scopes[scopes.length - 1].base;
+		if (localName) {
+			// xml:base 作用于本元素及后代，而非文档余下部分；先解析它，再处理其它属性。
+			for (const [, , name, , dq, sq] of tag.matchAll(XML_ATTR)) {
+				if (name !== 'xml:base') continue;
+				const raw = dq ?? sq;
+				try {
+					if (hasCustomXmlEntity(raw)) throw new Error();
+					elementBase = new URL(decodeXmlEntities(raw), elementBase ?? undefined).href;
+				} catch { elementBase = null; }
+				break;
+			}
+		}
+		const rw = v => elementBase === null ? v : rewriteUrl(v, elementBase, workerOrigin);
 		let type;
 		let hasRef = false;
 		out.push(tag.replace(XML_ATTR, (m, space, name, equals, dq, sq) => {
@@ -2525,23 +2545,28 @@ function rewriteSvg(source, baseUrl, workerOrigin) {
 			if (name === 'type' && type === undefined) type = decodeXmlEntities(raw).trim().toLowerCase();
 			if (name === 'src' || name === 'href' || name === 'xlink:href') hasRef = true;
 			if (name === 'integrity' && (localName === 'script' || localName === 'link')) return '';
-			if (hasCustomXmlEntity(raw)) return m;
+			if (hasCustomXmlEntity(raw) || elementBase === null) return m;
 			const decoded = decodeXmlEntities(raw);
 			let next;
-			if (XML_REFERENCE_ATTRS.has(name)) next = rw(decoded);
-			else if (name === 'srcset' || name === 'imagesrcset') next = rewriteSrcset(decoded, baseUrl, workerOrigin);
+			// 保留原生片段引用的含义，但让浏览器解析片段时也留在代理基地址内。
+			if (name === 'xml:base' && localName) next = rewriteUrl(elementBase, baseUrl, workerOrigin);
+			else if (XML_REFERENCE_ATTRS.has(name)) next = rw(decoded);
+			else if (name === 'srcset' || name === 'imagesrcset') next = rewriteSrcset(decoded, elementBase, workerOrigin);
 			else if (name === 'ping' && decoded.trim()) next = decoded.trim().split(/\s+/).map(rw).join(' ');
-			else if (SVG_CSS_ATTRS.has(name)) next = rewriteStyleAttr(decoded, baseUrl, workerOrigin);
+			else if (SVG_CSS_ATTRS.has(name)) next = rewriteStyleAttr(decoded, elementBase, workerOrigin);
 			return next === undefined || next === decoded ? m : `${space}${name}${equals}"${escapeXmlAttr(next)}"`;
 		}));
-		if (tag.endsWith('/>')) continue;
+		if (!localName || tag.endsWith('/>')) continue;
+		scopes.push({ name: qualifiedName, base: elementBase });
 		const rewrite = localName === 'style' ? rewriteCss : localName === 'script' && !hasRef && type === 'module' ? rewriteJsModuleSpecifiers : null;
 		if (!rewrite) continue;
 		const close = readXmlTextEnd(source, cursor, qualifiedName);
 		if (close) {
-			out.push(rewriteXmlText(source.slice(cursor, close.start), part => rewrite(part, baseUrl, workerOrigin)),
+			const text = source.slice(cursor, close.start);
+			out.push(elementBase === null ? text : rewriteXmlText(text, part => rewrite(part, elementBase, workerOrigin)),
 				source.slice(close.start, close.end));
 			cursor = close.end;
+			scopes.pop(); // 上面的扫描已消费这个元素的闭合标签。
 		}
 	}
 	out.push(source.slice(cursor));
