@@ -118,3 +118,11 @@ test('srcset preserves internal commas, data URLs and candidate separators', () 
 	collectHandlers().img[0].element(image);
 	assert.equal(image.getAttribute('srcset'), `${proxy('/dir/first,a.png')} 1x, data:image/gif;base64,token 2x, ${proxy('/dir/last.png')},, `);
 });
+
+test('HTML image start tags are parsed as img and their sources stay proxied', () => {
+	const handlers = collectHandlers();
+	const el = element('image', { src: '/leak.png', srcset: 'a.png 1x, b.png 2x' });
+	for (const h of handlers.image) h.element(el);
+	assert.equal(el.getAttribute('src'), proxy('/leak.png'));
+	assert.equal(el.getAttribute('srcset'), `${proxy('/dir/a.png')} 1x, ${proxy('/dir/b.png')} 2x`);
+});

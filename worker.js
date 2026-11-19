@@ -1928,7 +1928,8 @@ const HANDLERS = {
 	link:         { href: 'url', imagesrcset: 'srcset' },
 	script:       { src: 'url', href: 'url', 'xlink:href': 'url' },
 	img:          { src: 'url', srcset: 'srcset' },
-	image:        { href: 'url', 'xlink:href': 'url' },
+	// HTML 解析器把 SVG 之外的 <image> 当作 <img>，src/srcset 会直接加载。
+	image:        { href: 'url', 'xlink:href': 'url', src: 'url', srcset: 'srcset' },
 	feimage:      { href: 'url', 'xlink:href': 'url' },
 	iframe:       { src: 'url' },
 	frame:        { src: 'url' },
