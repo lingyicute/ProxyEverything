@@ -1183,36 +1183,44 @@ XMLHttpRequest.prototype.open=function(m,u){
   return oOpen.apply(this,arguments);
 };
 /* ---- EventSource / sendBeacon / Worker / Audio / WebSocket ---- */
-if(window.EventSource){var oES=window.EventSource;var ES=function(u,c){var nu=rpBase(u);return arguments.length>1?new oES(nu,c):new oES(nu);};ES.prototype=oES.prototype;try{Object.setPrototypeOf(ES,oES);}catch(e){}window.EventSource=ES;}
+/* 与 Request 一样经 Reflect.construct 转发 new.target：子类实例必须得到子类原型，不带 new 的调用照常报错。 */
+function wrapCtor(name,rewrite){
+  var O=window[name];
+  if(!O)return null;
+  var W=function(){
+    if(!new.target)throw new TypeError("Failed to construct '"+name+"': Please use the 'new' operator.");
+    var args=Array.prototype.slice.call(arguments);
+    if(args.length){try{args[0]=rewrite(args[0]);}catch(e){}}
+    return Reflect.construct(O,args,new.target);
+  };
+  W.prototype=O.prototype;
+  try{Object.setPrototypeOf(W,O);}catch(e){}
+  window[name]=W;
+  return W;
+}
+wrapCtor('EventSource',rpBase);
 if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{u=typeof u==='string'&&!u.trim()?rp(base()):rp(u);}catch(e){}return arguments.length>1?oSB(u,d):oSB(u);};}
-if(window.Worker){var oWk=window.Worker;var Wk=function(u,o){var nu=rpBase(u);return arguments.length>1?new oWk(nu,o):new oWk(nu);};Wk.prototype=oWk.prototype;try{Object.setPrototypeOf(Wk,oWk);}catch(e){}window.Worker=Wk;}
-try{if(window.SharedWorker){var oSW=window.SharedWorker;var SW=function(u,o){var nu=rpBase(u);return arguments.length>1?new oSW(nu,o):new oSW(nu);};SW.prototype=oSW.prototype;try{Object.setPrototypeOf(SW,oSW);}catch(e){}window.SharedWorker=SW;}}catch(e){}
-try{if(window.Audio){var oAu=window.Audio;var Au=function(u){return u!==undefined?new oAu(rp(u)):new oAu();};Au.prototype=oAu.prototype;try{Object.setPrototypeOf(Au,oAu);}catch(e){}window.Audio=Au;}}catch(e){}
+wrapCtor('Worker',rpBase);
+try{wrapCtor('SharedWorker',rpBase);}catch(e){}
+try{wrapCtor('Audio',rp);}catch(e){}
 /* Service Worker 无法在代理路径下正确工作，直接禁用注册以免站点异常 */
 try{if(navigator.serviceWorker)navigator.serviceWorker.register=function(){return Promise.reject(new Error('[ProxyEverything] service worker disabled'));};}catch(e){}
 /* ---- WebSocket：目标地址已在路径内，无需污染目标查询串 ---- */
-if(window.WebSocket){
-  var oWS=window.WebSocket;
-  var WS=function(u,protos){
-    var nu=u;
-    try{
-      if(typeof u==='string')nu=rp(u);
-      else if(u instanceof URL)nu=rp(u.href);
-      if(typeof nu==='string'){
-        var au=new URL(nu,location.href||WO);
-        if(au.origin===WO||au.origin===location.origin||isSelfHost(au)){
-          au.protocol=(location.protocol||au.protocol)==='https:'?'wss:':'ws:';
-          nu=au.href;
-        }
-      }
-    }catch(e){}
-    return protos===undefined?new oWS(nu):new oWS(nu,protos);
-  };
-  WS.prototype=oWS.prototype;
-  try{Object.setPrototypeOf(WS,oWS);}catch(e){}
-  ['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k,i){try{WS[k]=i;}catch(e){}});
-  window.WebSocket=WS;
+function rwWsUrl(u){
+  var nu=u;
+  if(typeof u==='string')nu=rp(u);
+  else if(u instanceof URL)nu=rp(u.href);
+  if(typeof nu==='string'){
+    var au=new URL(nu,location.href||WO);
+    if(au.origin===WO||au.origin===location.origin||isSelfHost(au)){
+      au.protocol=(location.protocol||au.protocol)==='https:'?'wss:':'ws:';
+      nu=au.href;
+    }
+  }
+  return nu;
 }
+var WS=wrapCtor('WebSocket',rwWsUrl);
+if(WS)['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k,i){try{WS[k]=i;}catch(e){}});
 /* ---- history / window.open / location.assign ---- */
 function wrapHistory(fn){return function(st,t,u){
   if(u!=null&&u!==''){

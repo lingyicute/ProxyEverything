@@ -203,3 +203,43 @@ test('history updates cannot switch the document to a different target origin', 
 	}
 	assert.deepEqual(calls, [proxy('/dir/next'), proxy('/dir/next')]);
 });
+
+test('shim: wrapped constructors keep subclass prototypes and native call semantics', () => {
+	class WebSocket {
+		constructor(url, protocols) { this.url = String(url); this.protocols = protocols; this.argc = arguments.length; }
+		static get OPEN() { return 1; }
+	}
+	class Worker { constructor(url, options) { this.url = url; this.options = options; this.argc = arguments.length; } }
+	class EventSource { constructor(url) { this.url = String(url); } }
+	class Audio { constructor(src) { this.src = src; this.argc = arguments.length; } }
+	const { ctx } = createBrowser({ WebSocket, Worker, EventSource, Audio });
+	const run = code => vm.runInContext(code, ctx);
+
+	const sub = run(`class Live extends window.WebSocket { ping() { return 'pong'; } }
+		new Live('wss://example.com/ws', ['chat'])`);
+	assert.ok(sub instanceof WebSocket, 'still an instance of the native class');
+	assert.equal(Object.getPrototypeOf(sub), run('Live.prototype'), 'subclass prototype survives construction');
+	assert.equal(sub.ping(), 'pong');
+	assert.equal(sub.url, 'wss://proxy.example/~wss%3A%2F%2Fexample.com/ws');
+	assert.equal(JSON.stringify(sub.protocols), '["chat"]');
+	assert.equal(sub.argc, 2, 'the arity of the forwarded arguments is preserved');
+
+	assert.equal(run(`new window.WebSocket('/relative').url`), 'wss://proxy.example/~https%3A%2F%2Fexample.com/relative');
+	assert.equal(run(`new window.WebSocket('wss://example.com/one').argc`), 1);
+	assert.equal(run('window.WebSocket.OPEN'), 1, 'static constants resolve through the native constructor');
+	assert.ok(run('new window.WebSocket("wss://example.com/x") instanceof window.WebSocket'));
+	// 异常来自 vm 上下文的 realm，按名称判断而不是跨 realm 比较构造器。
+	assert.throws(() => run(`window.WebSocket('wss://example.com/x')`), error => error.name === 'TypeError' && /new/.test(error.message),
+		'calling without new fails like the native constructor');
+
+	const worker = run(`class ModuleWorker extends window.Worker {}; new ModuleWorker(new URL('https://example.com/w.js'), { type: 'module' })`);
+	assert.equal(Object.getPrototypeOf(worker), run('ModuleWorker.prototype'));
+	assert.ok(worker.url instanceof URL);
+	assert.equal(worker.url.href, 'https://proxy.example/~https%3A%2F%2Fexample.com/w.js');
+	assert.equal(JSON.stringify(worker.options), '{"type":"module"}');
+
+	assert.equal(run(`new window.EventSource('events').url`), 'https://proxy.example/~https%3A%2F%2Fexample.com/dir/events');
+	assert.equal(run(`new window.Audio().argc`), 0, 'Audio() without a source stays argument-free');
+	assert.equal(run(`new window.Audio('clip.mp3').src`), 'https://proxy.example/~https%3A%2F%2Fexample.com/dir/clip.mp3');
+	assert.ok(run(`new window.Audio() instanceof window.Audio`));
+});
