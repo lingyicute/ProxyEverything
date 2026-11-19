@@ -174,21 +174,36 @@ test('bodyless responses do not advertise source metadata for a rewritten GET', 
 	const target = 'https://example.com/asset';
 	let upstream;
 	t.mock.method(globalThis, 'fetch', () => upstream);
-	for (const [method, status, type, policy, intact] of [
-		['HEAD', 200, 'text/css', '', false], ['GET', 304, 'text/html', '', false],
-		['HEAD', 200, 'image/png', '', true], ['HEAD', 200, 'text/css', 'no-transform', true],
-		['HEAD', 206, 'text/css', '', true],
+	// HEAD 仍需给出媒体类型：HTML 必定改写为 UTF-8，其它类型只保留不带 charset 的媒体类型；304 不重复声明。
+	for (const [method, status, type, policy, intact, contentType = intact ? type : null] of [
+		['HEAD', 200, 'text/css', '', false, 'text/css'],
+		['HEAD', 200, 'text/html; charset=gbk', '', false, 'text/html; charset=UTF-8'],
+		['HEAD', 200, 'application/javascript; charset=gbk', '', false, 'application/javascript'],
+		['GET', 304, 'text/html', '', false], ['HEAD', 200, 'image/png', '', true],
+		['HEAD', 200, 'text/css', 'no-transform', true], ['HEAD', 206, 'text/css', '', true],
 	]) {
 		upstream = new Response(null, { status, headers: {
 			'content-type': type, 'content-length': '99', etag: '"source"', 'content-encoding': 'gzip',
 		} });
 		const r = await worker.fetch(new Request(proxy(target), { method, headers: { 'cache-control': policy } }),
 			{ ALLOWED_TARGET_ORIGINS: new URL(target).origin });
-		assert.equal(r.status, status);
+		assert.equal(r.status, status, type);
 		assert.equal(r.body, null);
-		for (const field of ['content-type', 'content-length', 'content-encoding', 'etag']) {
-			assert.equal(r.headers.get(field), intact ? upstream.headers.get(field) : null, field);
+		assert.equal(r.headers.get('content-type'), contentType, type);
+		for (const field of ['content-length', 'content-encoding', 'etag']) {
+			assert.equal(r.headers.get(field), intact ? upstream.headers.get(field) : null, `${type} ${field}`);
 		}
+	}
+
+	// 声明长度超过改写上限且无需解码的正文一定会原样透传，HEAD 沿用 GET 的表示元数据。
+	for (const [length, encoding, intact] of [['3000000', null, true], ['3000000', 'gzip', false], ['2097152', null, false]]) {
+		const headers = { 'content-type': 'text/css; charset=gbk', 'content-length': length, etag: '"big"' };
+		if (encoding) headers['content-encoding'] = encoding;
+		upstream = new Response(null, { headers });
+		const r = await worker.fetch(new Request(proxy(target), { method: 'HEAD' }), { ALLOWED_TARGET_ORIGINS: new URL(target).origin });
+		assert.equal(r.headers.get('content-type'), intact ? 'text/css; charset=gbk' : 'text/css', `${length} ${encoding}`);
+		assert.equal(r.headers.get('content-length'), intact ? length : null, `${length} ${encoding}`);
+		assert.equal(r.headers.get('etag'), intact ? '"big"' : null, `${length} ${encoding}`);
 	}
 });
 

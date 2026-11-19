@@ -2941,10 +2941,21 @@ Disallow: /
 			if (resp.body) resp.body.cancel().catch(() => {});
 			// 这些字段描述的是原始字节；没有正文时无法判断是否触发大小限制，
 			// 因而不能冒充下游 GET 的长度、编码、摘要或验证器。
-			if (![204, 205, 206].includes(upstream.status) && transformKind(upstream.headers, request) &&
-				!hasNoTransform(request.headers.get('Cache-Control'))) {
+			const kind = [204, 205, 206].includes(upstream.status) || hasNoTransform(request.headers.get('Cache-Control'))
+				? null : transformKind(upstream.headers, request);
+			// 声明长度超过上限且无需解码的正文必然原样透传，HEAD 可沿用与 GET 相同的表示元数据。
+			const declaredLength = Number(upstream.headers.get('Content-Length'));
+			const passthrough = kind !== null && kind !== 'html' && request.method === 'HEAD' &&
+				declaredLength > MAX_TRANSFORM_BYTES && contentCoding(upstream.headers) === 'identity';
+			if (kind && !passthrough) {
 				stripTransformedHeaders(resp.headers);
-				resp.headers.delete('Content-Type'); // 最终 charset 依赖正文嗅探与透传判定
+				// 304 不重复声明媒体类型。HEAD 必须保留它：HTML 总会流式改写为 UTF-8；
+				// 其它类型的 charset 取决于正文大小是否触发透传，只保留不含参数的媒体类型。
+				if (upstream.status === 304) resp.headers.delete('Content-Type');
+				else {
+					const mime = mimeType(upstream.headers.get('Content-Type'));
+					resp.headers.set('Content-Type', kind === 'html' ? `${mime}; charset=UTF-8` : mime);
+				}
 			}
 			return new Response(null, resp);
 		}
