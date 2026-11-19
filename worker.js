@@ -2773,7 +2773,11 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin, env) {
 	const upstream = resp.webSocket;
 	if (!upstream) {
 		if (resp.body) resp.body.cancel().catch(() => {});
-		return new Response('上游不支持 WebSocket（不自动跟随重定向）', { status: 502 });
+		// 上游明确拒绝握手（4xx/5xx）时保留其状态码供排查；重定向不自动跟随，其余情况一律 502。
+		const status = resp.status >= 400 && resp.status <= 599 ? resp.status : 502;
+		return new Response('上游未完成 WebSocket 握手（不自动跟随重定向）', {
+			status, headers: { 'Cache-Control': 'no-store' },
+		});
 	}
 	const pair = new WebSocketPair();
 	const client = pair[0];

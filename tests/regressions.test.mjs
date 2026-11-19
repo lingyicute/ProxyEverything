@@ -379,3 +379,16 @@ test('upstream HTTP and opening WebSocket handshakes use the request cancellatio
 		assert.equal(pending.at(-1).aborted, true);
 	}
 });
+
+test('rejected WebSocket handshakes report the upstream status instead of a generic 502', async t => {
+	let upstream;
+	t.mock.method(globalThis, 'fetch', async () => upstream);
+	const request = new Request('https://proxy.example/~wss%3A%2F%2Fexample.com/socket', { headers: { Upgrade: 'websocket' } });
+	for (const [status, expected] of [[401, 401], [403, 403], [503, 503], [302, 502], [200, 502]]) {
+		upstream = new Response('handshake body', { status, headers: status === 302 ? { location: 'wss://example.com/elsewhere' } : {} });
+		const response = await worker.fetch(request, { ALLOWED_TARGET_ORIGINS: 'https://example.com' });
+		assert.equal(response.status, expected, String(status));
+		assert.equal(response.headers.get('cache-control'), 'no-store');
+		assert.ok(upstream.bodyUsed, 'the rejected handshake body is drained');
+	}
+});
