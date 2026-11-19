@@ -392,3 +392,17 @@ test('rejected WebSocket handshakes report the upstream status instead of a gene
 		assert.ok(upstream.bodyUsed, 'the rejected handshake body is drained');
 	}
 });
+
+test('XHTML charset sniffing stops once no XML declaration can still supply an encoding', async () => {
+	for (const head of ['<html xmlns="http://www.w3.org/1999/xhtml">', '<?xml version="1.0"?><html>']) {
+		// 上游仍在流式输出：嗅探不能等到 4096 字节或 EOF。
+		const stream = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(head)); } });
+		const sniffed = await Promise.race([
+			sniffHtmlCharset(stream, null, true),
+			new Promise(resolve => setTimeout(() => resolve('timeout'), 200)),
+		]);
+		assert.notEqual(sniffed, 'timeout', head);
+		assert.equal(sniffed.charset, null, head);
+		await sniffed.body.cancel();
+	}
+});

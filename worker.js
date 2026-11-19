@@ -906,6 +906,10 @@ async function sniffHtmlCharset(body, declaredCharset = null, isXml = false) {
 			const prefixText = new TextDecoder().decode(head.subarray(0, total));
 			charset = isXml ? xmlDeclaredCharset(prefixText) : prescanHtmlCharset(prefixText);
 			if (charset) break;
+			// XML 声明只能位于开头：已完整读完或不可能再出现时，结论不会因更多字节改变。
+			if (isXml && (prefixText.length < 6
+				? !'<?xml'.startsWith(prefixText.slice(0, 5))
+				: !/^<\?xml[ \t\r\n][^?]*$/.test(prefixText))) break;
 		}
 	} finally {
 		// 不 await：tee 另一支消费完之前 cancel 可能不 resolve。
