@@ -2225,11 +2225,15 @@ Disallow: /wss%3A
 
 		// ---- 漏网的站内相对请求：innerHTML、location.href = '/x'、Worker 内请求、默认 /favicon.ico 等未经改写的地址
 		//      会直接落到代理域。路径不带协议而 Referer 是代理页面时，按来源页的目标站点还原并重定向 ----
+		const isWebSocket = (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket';
+		let refererRouted = null;
 		if (!/^(?:https?|wss?):\/\//i.test(safeDecode(url.pathname.substring(1)).trim().replace(/^\/+/, ''))) {
 			const refTarget = refererTarget(request, workerOrigin, env);
 			if (refTarget) {
 				const leaked = new URL(url.pathname.replace(/^\/+/, '/') + url.search, refTarget);
-				return new Response(null, {
+				// 浏览器不跟随 WebSocket 握手的重定向（如无 shim 的 Worker 内相对地址），直接按来源页目标转发。
+				if (isWebSocket) refererRouted = leaked;
+				else return new Response(null, {
 					status: 307,
 					headers: { 'Location': toProxyUrl(leaked.href, workerOrigin), 'Cache-Control': 'no-store' },
 				});
@@ -2237,12 +2241,12 @@ Disallow: /wss%3A
 		}
 
 		// ---- favicon 等杂项，避免被当成目标域名 ----
-		if (/^\/(favicon\.ico|sitemap\.xml|apple-touch-icon.*\.png|\.well-known\/.*)$/i.test(url.pathname)) {
+		if (!refererRouted && /^\/(favicon\.ico|sitemap\.xml|apple-touch-icon.*\.png|\.well-known\/.*)$/i.test(url.pathname)) {
 			return new Response(null, { status: 404 });
 		}
 
 		// ---- 解析目标 URL ----
-		const targetUrl = parseTarget(url);
+		const targetUrl = refererRouted || parseTarget(url);
 		if (!targetUrl) {
 			return invalidTargetPage(url);
 		}
@@ -2260,7 +2264,7 @@ Disallow: /wss%3A
 		const ck = { ns: cookieNamespace(targetUrl), isHttps: url.protocol === 'https:' };
 
 		// WebSocket 请求走独立通道
-		if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
+		if (isWebSocket) {
 			try {
 				return await handleWebSocket(request, targetUrl, ck, workerOrigin, env);
 			} catch (e) {

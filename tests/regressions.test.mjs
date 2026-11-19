@@ -315,3 +315,18 @@ test('upstream HTTP and opening WebSocket handshakes use the request cancellatio
 		assert.equal(pending.at(-1).aborted, true);
 	}
 });
+
+test('leaked relative WebSocket handshakes are forwarded instead of redirected', async t => {
+	const seen = [];
+	t.mock.method(globalThis, 'fetch', async url => { seen.push(String(url)); return new Response('refused', { status: 403 }); });
+	const request = new Request('https://proxy.example/live/socket?room=1', {
+		headers: { Upgrade: 'websocket', Referer: proxy('https://example.com/app/worker.js') },
+	});
+	const response = await worker.fetch(request, { ALLOWED_TARGET_ORIGINS: 'https://example.com' });
+	assert.equal(response.status, 502);
+	assert.deepEqual(seen, ['https://example.com/live/socket?room=1']);
+	const plain = await worker.fetch(new Request('https://proxy.example/live/data', {
+		headers: { Referer: proxy('https://example.com/app/') },
+	}), { ALLOWED_TARGET_ORIGINS: 'https://example.com' });
+	assert.equal(plain.status, 307);
+});
