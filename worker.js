@@ -1918,8 +1918,9 @@ function getHtmlAttribute(el, name, isXml = false) {
 	return isXml ? decodeXmlAttribute(raw) : decodeHtmlAttribute(raw);
 }
 
-function setHtmlAttribute(el, name, value) {
-	el.setAttribute(name, escapeHtml(value));
+// XHTML 的属性值按 XML 规范化，制表符和换行必须写成字符引用才能保留。
+function setHtmlAttribute(el, name, value, isXml = false) {
+	el.setAttribute(name, isXml ? escapeXmlAttr(value) : escapeHtml(value), isXml);
 }
 
 const HANDLERS = {
@@ -2020,7 +2021,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 					if (u.protocol === 'http:' || u.protocol === 'https:') {
 						hasBaseHref = true;
 						baseHref = u.href;
-						setHtmlAttribute(el, 'data-pe-base', baseHref);
+						setHtmlAttribute(el, 'data-pe-base', baseHref, isXml);
 					} else {
 						el.removeAttribute('data-pe-base');
 					}
@@ -2046,14 +2047,14 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			}
 			if (he === 'refresh') {
 				const c = getHtmlAttribute(el, 'content', isXml);
-				if (c) setHtmlAttribute(el, 'content', rewriteRefreshContent(c, baseHref, workerOrigin));
+				if (c) setHtmlAttribute(el, 'content', rewriteRefreshContent(c, baseHref, workerOrigin), isXml);
 			}
 			if (he === 'content-type') {
 				const c = getHtmlAttribute(el, 'content', isXml);
-				if (c) setHtmlAttribute(el, 'content', c.replace(/charset\s*=\s*[^;]*/i, 'charset=UTF-8'));
+				if (c) setHtmlAttribute(el, 'content', c.replace(/charset\s*=\s*[^;]*/i, 'charset=UTF-8'), isXml);
 			}
 			if (getHtmlAttribute(el, 'charset', isXml) != null) {
-				setHtmlAttribute(el, 'charset', 'UTF-8');
+				setHtmlAttribute(el, 'charset', 'UTF-8', isXml);
 			}
 		},
 	});
@@ -2100,7 +2101,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 						} else next = rw(v);
 					}
 					// 页内锚点、javascript:/mailto:/data: 等不变的值无需跨运行时回写（与通配处理器一致）。
-					if (next !== v) setHtmlAttribute(el, attr, next);
+					if (next !== v) setHtmlAttribute(el, attr, next, isXml);
 				}
 				// script 标签上的内联 srcset 不存在；但懒加载属性可能出现在任意标签上（下面统一处理）
 			},
@@ -2152,7 +2153,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 				}
 				if (next !== v) (updates || (updates = [])).push([attr, next]);
 			}
-			if (updates) for (const [attr, next] of updates) setHtmlAttribute(el, attr, next);
+			if (updates) for (const [attr, next] of updates) setHtmlAttribute(el, attr, next, isXml);
 		},
 	});
 

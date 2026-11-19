@@ -126,3 +126,13 @@ test('HTML image start tags are parsed as img and their sources stay proxied', (
 	assert.equal(el.getAttribute('src'), proxy('/leak.png'));
 	assert.equal(el.getAttribute('srcset'), `${proxy('/dir/a.png')} 1x, ${proxy('/dir/b.png')} 2x`);
 });
+
+test('XHTML attribute writes keep tab and newline references from XML normalization', () => {
+	const handlers = collectHandlers('application/xhtml+xml');
+	const el = Object.assign(element('div', { style: 'background:url(a.png)&#10;' }), { before() {} });
+	for (const h of handlers['*']) h.element(el);
+	assert.equal(el.getAttribute('style'), `background:url(&quot;${proxy('/dir/a.png')}&quot;)&#10;`);
+	const html = Object.assign(element('div', { style: "background:url('a.png')" }), { before() {} });
+	for (const h of collectHandlers()['*']) h.element(html);
+	assert.equal(html.getAttribute('style'), `background:url(&quot;${proxy('/dir/a.png')}&quot;)`);
+});
