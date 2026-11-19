@@ -18,6 +18,7 @@
 
 const HOP_BY_HOP = new Set([
 	'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
+	'proxy-connection', // 非标准旧代理连接控制头，同样不能跨越当前连接
 	'te', 'trailer', 'transfer-encoding', 'upgrade',
 ]);
 
