@@ -2654,8 +2654,10 @@ function targetPolicyError(targetUrl, env) {
 	const configured = env?.ALLOWED_TARGET_ORIGINS;
 	try {
 		if (typeof configured !== 'string' || !configured.trim()) throw new Error();
-		const origins = configured.split(',').map(value => {
-			const entry = value.trim();
+		// 多行配置常带尾随逗号或空行；空项不代表任何来源，忽略而不是让整个列表失效。
+		const entries = configured.split(',').map(value => value.trim()).filter(Boolean);
+		if (!entries.length) throw new Error();
+		const origins = entries.map(entry => {
 			// 先验证来源语法：URL 解析会消除点路径、反斜线、空查询串等输入错误。
 			if (!/^https?:\/\/[^\s\\/@?#*\x00-\x1f\x7f]+\/?$/i.test(entry)) throw new Error();
 			const u = new URL(entry);

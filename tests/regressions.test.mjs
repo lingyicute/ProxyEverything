@@ -309,7 +309,7 @@ test('upstream access requires a valid explicit origin allowlist', async () => {
 	globalThis.fetch = async url => { seen.push(url); return new Response('ok'); };
 	try {
 		const request = new Request(proxy('https://example.com/page'));
-		for (const value of [undefined, '', '*', 'https://example.com/path', 'not a URL',
+		for (const value of [undefined, '', ' , ,\n', '*', 'https://example.com/path', 'not a URL',
 			'https:example.com', 'https://example.com/path/..', 'https://example.com?',
 			'https://example.com/#', 'https://@example.com', 'https://example.com,https://*.example.com']) {
 			const response = await worker.fetch(request, { ALLOWED_TARGET_ORIGINS: value });
@@ -319,6 +319,9 @@ test('upstream access requires a valid explicit origin allowlist', async () => {
 		assert.deepEqual(seen, []);
 		assert.equal((await worker.fetch(request, { ALLOWED_TARGET_ORIGINS: 'https://example.com' })).status, 200);
 		assert.deepEqual(seen, ['https://example.com/page']);
+		// 多行配置的尾随逗号和空行不是来源，不应让整个列表失效。
+		assert.equal((await worker.fetch(request, { ALLOWED_TARGET_ORIGINS: 'https://example.com,\n\nhttps://static.example.com,\n' })).status, 200);
+		assert.equal(seen.length, 2);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
