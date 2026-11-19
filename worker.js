@@ -1903,9 +1903,16 @@ function decodeHtmlAttribute(raw) {
 }
 
 // HTMLRewriter 提供原始属性文本；setAttribute 只负责保护引号，不会转义 '&'。
-function getHtmlAttribute(el, name) {
+function decodeXmlAttribute(raw) {
+	// XML 先规范化原始换行及属性空白，再展开引用；&#9; 等引用不能被折叠成空格。
+	return decodeXmlEntities(raw.replace(/\r\n?/g, '\n').replace(/[\t\n]/g, ' '));
+}
+
+function getHtmlAttribute(el, name, isXml = false) {
 	const raw = el.getAttribute(name);
-	return raw == null ? null : decodeHtmlAttribute(raw);
+	// 未解析 DTD 中的自定义实体时，不把它改成 HTML 实体或普通文本。
+	if (raw == null || (isXml && hasCustomXmlEntity(raw))) return null;
+	return isXml ? decodeXmlAttribute(raw) : decodeHtmlAttribute(raw);
 }
 
 function setHtmlAttribute(el, name, value) {
@@ -2002,7 +2009,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 	// 只采纳第一个合法 HTTP(S) href；保留 target 与原始基地址供 shim 使用，移除原生 href。
 	rewriter.on('base', {
 		element(el) {
-			const h = getHtmlAttribute(el, 'href');
+			const h = getHtmlAttribute(el, 'href', isXml);
 			if (h != null && !hasBaseHref) {
 				try {
 					const u = new URL(h, baseUrl);
@@ -2026,22 +2033,22 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 	// CSP/Set-Cookie/X-Frame-Options/referrer meta 标签直接移除；refresh meta 重写目标；charset meta 对齐为 UTF-8
 	rewriter.on('meta', {
 		element(el) {
-			const he = (getHtmlAttribute(el, 'http-equiv') || '').trim().toLowerCase();
-			const name = (getHtmlAttribute(el, 'name') || '').trim().toLowerCase();
+			const he = (getHtmlAttribute(el, 'http-equiv', isXml) || '').trim().toLowerCase();
+			const name = (getHtmlAttribute(el, 'name', isXml) || '').trim().toLowerCase();
 			if (he === 'content-security-policy' || he === 'content-security-policy-report-only' ||
 				he === 'set-cookie' || he === 'x-frame-options' || name === 'referrer') {
 				el.remove();
 				return;
 			}
 			if (he === 'refresh') {
-				const c = getHtmlAttribute(el, 'content');
+				const c = getHtmlAttribute(el, 'content', isXml);
 				if (c) setHtmlAttribute(el, 'content', rewriteRefreshContent(c, baseHref, workerOrigin));
 			}
 			if (he === 'content-type') {
-				const c = getHtmlAttribute(el, 'content');
+				const c = getHtmlAttribute(el, 'content', isXml);
 				if (c) setHtmlAttribute(el, 'content', c.replace(/charset\s*=\s*[^;]*/i, 'charset=UTF-8'));
 			}
-			if (getHtmlAttribute(el, 'charset') != null) {
+			if (getHtmlAttribute(el, 'charset', isXml) != null) {
 				setHtmlAttribute(el, 'charset', 'UTF-8');
 			}
 		},
@@ -2057,7 +2064,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 				: rewriteJsModuleSpecifiers(part, baseHref, workerOrigin)),
 		el => {
 			if (el.hasAttribute('src') || el.hasAttribute('href') || el.hasAttribute('xlink:href')) return null;
-			const type = (getHtmlAttribute(el, 'type') || '').trim().toLowerCase();
+			const type = (getHtmlAttribute(el, 'type', isXml) || '').trim().toLowerCase();
 			return type === 'module' || type === 'importmap' || type === 'speculationrules' ? type : null;
 		}
 	));
@@ -2069,7 +2076,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 				// 内容被我们改写过的资源必须去掉 SRI，否则哈希校验失败被浏览器拦截
 				if (tag === 'script' || tag === 'link') el.removeAttribute('integrity');
 				for (const [attr, kind] of attrs) {
-					const v = getHtmlAttribute(el, attr);
+					const v = getHtmlAttribute(el, attr, isXml);
 					if (v == null) continue;
 					let next;
 					if (kind === 'srcset') {
@@ -2127,7 +2134,8 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 				if (handled && handled.includes(attr)) continue;
 				(handled || (handled = [])).push(attr);
 				if (!rawValue) continue;
-				const v = decodeHtmlAttribute(rawValue);
+				if (isXml && hasCustomXmlEntity(rawValue)) continue;
+				const v = isXml ? decodeXmlAttribute(rawValue) : decodeHtmlAttribute(rawValue);
 				let next = v;
 				if (attr === 'style') {
 					next = rewriteStyleAttr(v, baseHref, workerOrigin);
@@ -2532,7 +2540,7 @@ function rewriteSvg(source, baseUrl, workerOrigin) {
 				const raw = dq ?? sq;
 				try {
 					if (hasCustomXmlEntity(raw)) throw new Error();
-					elementBase = new URL(decodeXmlEntities(raw), elementBase ?? undefined).href;
+					elementBase = new URL(decodeXmlAttribute(raw), elementBase ?? undefined).href;
 				} catch { elementBase = null; }
 				break;
 			}
@@ -2542,11 +2550,11 @@ function rewriteSvg(source, baseUrl, workerOrigin) {
 		let hasRef = false;
 		out.push(tag.replace(XML_ATTR, (m, space, name, equals, dq, sq) => {
 			const raw = dq ?? sq;
-			if (name === 'type' && type === undefined) type = decodeXmlEntities(raw).trim().toLowerCase();
+			if (name === 'type' && type === undefined) type = decodeXmlAttribute(raw).trim().toLowerCase();
 			if (name === 'src' || name === 'href' || name === 'xlink:href') hasRef = true;
 			if (name === 'integrity' && (localName === 'script' || localName === 'link')) return '';
 			if (hasCustomXmlEntity(raw) || elementBase === null) return m;
-			const decoded = decodeXmlEntities(raw);
+			const decoded = decodeXmlAttribute(raw);
 			let next;
 			// 保留原生片段引用的含义，但让浏览器解析片段时也留在代理基地址内。
 			if (name === 'xml:base' && localName) next = rewriteUrl(elementBase, baseUrl, workerOrigin);
