@@ -35,6 +35,9 @@ const STRIP_RESPONSE_HEADERS = [
 	'report-to',
 	'nel',
 	'permissions-policy',
+	'feature-policy',     // Permissions-Policy 的旧名，同样按原站来源声明
+	'integrity-policy',   // 要求脚本带 SRI；代理已移除改写后失效的 integrity，保留会拦截全部脚本
+	'integrity-policy-report-only',
 	'timing-allow-origin',
 	'content-location',
 	'refresh',            // 由 stripResponseHeaders 改写目标后重新写入

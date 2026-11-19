@@ -60,6 +60,18 @@ test('origin-wide persistent policy headers do not leak onto the shared proxy or
 	assert.equal(response.headers.get('content-type'), 'image/png');
 });
 
+test('integrity and legacy feature policies do not block rewritten pages', async () => {
+	const headers = {
+		'content-type': 'text/javascript',
+		'integrity-policy': 'blocked-destinations=(script)',
+		'integrity-policy-report-only': 'blocked-destinations=(script)',
+		'feature-policy': "camera 'none'",
+	};
+	const response = await fetchThrough('https://example.com/a.js', headers, 'void 0;');
+	assert.equal(response.status, 200);
+	for (const name of Object.keys(headers).slice(1)) assert.equal(response.headers.get(name), null, name);
+});
+
 test('only exact supported media types are transformed; attachments and no-transform stay untouched', async () => {
 	const page = 'https://example.com/dir/page';
 	const original = 'a{background:url(untouched.png)}';
