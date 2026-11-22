@@ -3487,21 +3487,34 @@ var HUES=[285,250,200,155,35,330];
 var row=$('hueRow');
 if(row){
   var cur=getComputedStyle(document.documentElement).getPropertyValue('--hue').trim()||'285';
-  HUES.forEach(function(h){
+  var selected=HUES.findIndex(function(h){return Math.abs(parseFloat(cur)-h)<1;});
+  var radios=[];
+  HUES.forEach(function(h,index){
     var b=document.createElement('button');
     b.type='button';b.className='hue-dot';b.style.setProperty('--h',h);
     b.setAttribute('role','radio');
-    b.setAttribute('aria-checked',String(Math.abs(parseFloat(cur)-h)<1));
+    b.setAttribute('aria-checked',String(index===selected));
+    b.tabIndex=index===Math.max(0,selected)?0:-1;
     b.setAttribute('aria-label','主题色 '+h);
     b.addEventListener('click',function(){
       var root=document.documentElement;
       root.style.setProperty('--hue',String(h));
       root.style.setProperty('--hue3',String((h+60)%360));
       try{localStorage.setItem('pe-hue',String(h));}catch(e){}
-      row.querySelectorAll('.hue-dot').forEach(function(x){x.setAttribute('aria-checked','false');});
-      b.setAttribute('aria-checked','true');
+      radios.forEach(function(x){x.setAttribute('aria-checked',String(x===b));x.tabIndex=x===b?0:-1;});
     });
+    radios.push(b);
     row.appendChild(b);
+  });
+  row.addEventListener('keydown',function(e){
+    var i=radios.indexOf(e.target);
+    if(i<0)return;
+    var delta=e.key==='ArrowRight'||e.key==='ArrowDown'?1:e.key==='ArrowLeft'||e.key==='ArrowUp'?-1:0;
+    if(!delta)return;
+    e.preventDefault();
+    var next=radios[(i+delta+radios.length)%radios.length];
+    next.click();
+    next.focus();
   });
 }
 })();`;

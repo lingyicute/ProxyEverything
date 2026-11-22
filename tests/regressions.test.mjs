@@ -8,6 +8,7 @@ const {
 	default: worker,
 	getRootHtml,
 	getShimScript,
+	MD3_JS,
 	quoteCssString,
 	rewriteCss,
 	rewriteJsModuleSpecifiers,
@@ -20,7 +21,7 @@ const {
 } = await import(
 	'data:text/javascript;base64,' + Buffer.from(source + `
 export {
-	getRootHtml, getShimScript, quoteCssString, rewriteCss,
+	getRootHtml, getShimScript, MD3_JS, quoteCssString, rewriteCss,
 	rewriteJsModuleSpecifiers, rewriteRefreshContent, rewriteStyleAttr,
 	rewriteSvg, rewriteXmlText, rewriteUrl, sniffHtmlCharset, stringifyInlineJson
 };`).toString('base64')
@@ -453,4 +454,38 @@ test('failed subrequests return non-cacheable errors without internal exception 
 		assert.equal(response.headers.get('Cache-Control'), 'no-store');
 		assert.ok(!(await response.text()).includes(diagnostic));
 	}
+});
+
+test('homepage hue radios have one tab stop and wrap on arrow keys', () => {
+	const buttons = [], storage = new Map();
+	let keydown, focused;
+	const row = {
+		appendChild: button => buttons.push(button),
+		addEventListener: (type, callback) => { if (type === 'keydown') keydown = callback; },
+	};
+	runInNewContext(MD3_JS, {
+		window: { addEventListener() {} },
+		localStorage: { setItem: (...args) => storage.set(...args) },
+		getComputedStyle: () => ({ getPropertyValue: () => '285' }),
+		document: {
+			documentElement: { style: { setProperty() {} } },
+			addEventListener() {}, getElementById: id => id === 'hueRow' ? row : null,
+			createElement() {
+				const attrs = new Map(), listeners = new Map();
+				return {
+					attrs, style: { setProperty() {} }, focus() { focused = this; },
+					setAttribute: (...args) => attrs.set(...args),
+					addEventListener: (...args) => listeners.set(...args), click() { listeners.get('click')(); },
+				};
+			},
+		},
+	});
+	assert.deepEqual(buttons.filter(b => b.tabIndex === 0), [buttons[0]]);
+	let prevented = false;
+	keydown({ key: 'ArrowLeft', target: buttons[0], preventDefault() { prevented = true; } });
+	assert.equal(prevented, true);
+	assert.equal(focused, buttons.at(-1));
+	assert.deepEqual(buttons.filter(b => b.tabIndex === 0), [focused]);
+	assert.deepEqual(buttons.filter(b => b.attrs.get('aria-checked') === 'true'), [focused]);
+	assert.equal(storage.get('pe-hue'), '330');
 });
