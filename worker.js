@@ -2403,7 +2403,7 @@ function stringifyInlineJson(value) {
 }
 
 /** 重写 <script type="importmap">：按 HTML 规范以文档基地址解析映射并移除失效的 integrity */
-function rewriteImportMap(text, baseUrl, workerOrigin) {
+const rewriteImportMap = capRewriteGrowth((account, text, baseUrl, workerOrigin) => {
 	let map;
 	try { map = JSON.parse(text); } catch { return text; }
 	if (!map || typeof map !== 'object' || Array.isArray(map)) return text;
@@ -2412,8 +2412,8 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 		// 模块名是任意 JSON 键，__proto__ 也必须作为普通属性保留。
 		const next = Object.create(null);
 		for (const [k, v] of Object.entries(specMap)) {
-			const rwKey = rewriteModuleSpecifier(k, baseUrl, workerOrigin);
-			next[rwKey] = typeof v === 'string' ? rewriteModuleSpecifier(v, baseUrl, workerOrigin) : v;
+			const rwKey = account(k.length, rewriteModuleSpecifier(k, baseUrl, workerOrigin));
+			next[rwKey] = typeof v === 'string' ? account(v.length, rewriteModuleSpecifier(v, baseUrl, workerOrigin)) : v;
 		}
 		return next;
 	};
@@ -2424,16 +2424,16 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 		const nextScopes = Object.create(null);
 		for (const [scopeKey, specMap] of Object.entries(map.scopes)) {
 			// 作用域前缀同样是文档基地址下的 URL，必须与被代理的模块 URL 使用同一种形式。
-			nextScopes[rewriteUrl(scopeKey, baseUrl, workerOrigin, true)] = rewriteSpecMap(specMap);
+			nextScopes[account(scopeKey.length, rewriteUrl(scopeKey, baseUrl, workerOrigin, true))] = rewriteSpecMap(specMap);
 		}
 		map.scopes = nextScopes;
 	}
 	delete map.integrity;
 	return stringifyInlineJson(map);
-}
+});
 
 /** 重写 <script type="speculationrules"> 中的预取/预渲染 URL 列表 */
-function rewriteSpeculationRules(text, baseUrl, workerOrigin, docUrl = baseUrl) {
+const rewriteSpeculationRules = capRewriteGrowth((account, text, baseUrl, workerOrigin, docUrl = baseUrl) => {
 	let spec;
 	try { spec = JSON.parse(text); } catch { return text; }
 	if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return text;
@@ -2443,12 +2443,12 @@ function rewriteSpeculationRules(text, baseUrl, workerOrigin, docUrl = baseUrl) 
 		for (const rule of rules) {
 			if (rule && Array.isArray(rule.urls)) {
 				const ruleBase = rule.relative_to === 'document' ? docUrl : baseUrl;
-				rule.urls = rule.urls.map(u => typeof u === 'string' ? rewriteUrl(u, ruleBase, workerOrigin) : u);
+				rule.urls = rule.urls.map(u => typeof u === 'string' ? account(u.length, rewriteUrl(u, ruleBase, workerOrigin)) : u);
 			}
 		}
 	}
 	return stringifyInlineJson(spec);
-}
+});
 
 function isValidXmlCodePoint(code) {
 	return code === 9 || code === 10 || code === 13 || (code >= 0x20 && code <= 0xd7ff) ||
@@ -2533,7 +2533,7 @@ function readXmlTextEnd(source, start, qualifiedName) {
 	return null;
 }
 
-function rewriteXmlText(body, transform) {
+const rewriteXmlText = capRewriteGrowth((account, body, transform) => {
 	const rewritePart = (part) => {
 		if (hasCustomXmlEntity(part)) return part;
 		const decoded = decodeXmlEntities(part);
@@ -2548,17 +2548,17 @@ function rewriteXmlText(body, transform) {
 		const cdata = match[0] === '<![CDATA[';
 		const end = body.indexOf(cdata ? ']]>' : '-->', opener.lastIndex);
 		if (end < 0) return body;
-		out += rewritePart(body.slice(last, match.index));
+		out += account(match.index - last, rewritePart(body.slice(last, match.index)));
 		out += cdata
-			? `<![CDATA[${transform(body.slice(opener.lastIndex, end)).replace(/]]>/g, ']]]]><![CDATA[>')}]]>`
+			? account(end + 3 - match.index, `<![CDATA[${transform(body.slice(opener.lastIndex, end)).replace(/]]>/g, ']]]]><![CDATA[>')}]]>`)
 			: body.slice(match.index, end + 3);
 		last = opener.lastIndex = end + 3;
 	}
-	return out + rewritePart(body.slice(last));
-}
+	return out + account(body.length - last, rewritePart(body.slice(last)));
+});
 
 /** 独立 SVG 文档：重写引用属性和样式，保留不理解的 XML 声明与实体。 */
-function rewriteSvg(source, baseUrl, workerOrigin) {
+const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => {
 	const out = [];
 	const scopes = [{ name: null, base: baseUrl }];
 	let cursor = 0;
@@ -2577,7 +2577,7 @@ function rewriteSvg(source, baseUrl, workerOrigin) {
 		const localName = qualifiedName?.split(':').pop();
 		const stylesheet = kind === 'pi' && /^<\?xml-stylesheet[ \t\n\r]/.test(tag);
 		if (kind === 'pi' && /^<\?xml[ \t\n\r]/.test(tag)) {
-			out.push(utf8XmlDeclaration(tag));
+			out.push(account(tag.length, utf8XmlDeclaration(tag)));
 			continue;
 		}
 		if (!localName && !stylesheet) { out.push(tag); continue; }
@@ -2611,7 +2611,7 @@ function rewriteSvg(source, baseUrl, workerOrigin) {
 			else if (name === 'srcset' || name === 'imagesrcset') next = rewriteSrcset(decoded, elementBase, workerOrigin);
 			else if (name === 'ping' && decoded.trim()) next = decoded.trim().split(/\s+/).map(rw).join(' ');
 			else if (SVG_CSS_ATTRS.has(name)) next = rewriteStyleAttr(decoded, elementBase, workerOrigin);
-			return next === undefined || next === decoded ? m : `${space}${name}${equals}"${escapeXmlAttr(next)}"`;
+			return next === undefined || next === decoded ? m : account(m.length, `${space}${name}${equals}"${escapeXmlAttr(next)}"`);
 		}));
 		if (!localName || tag.endsWith('/>')) continue;
 		scopes.push({ name: qualifiedName, base: elementBase });
@@ -2620,25 +2620,25 @@ function rewriteSvg(source, baseUrl, workerOrigin) {
 		const close = readXmlTextEnd(source, cursor, qualifiedName);
 		if (close) {
 			const text = source.slice(cursor, close.start);
-			out.push(elementBase === null ? text : rewriteXmlText(text, part => rewrite(part, elementBase, workerOrigin)),
-				source.slice(close.start, close.end));
+			const rewritten = elementBase === null ? text : rewriteXmlText(text, part => rewrite(part, elementBase, workerOrigin));
+			out.push(account(text.length, rewritten), source.slice(close.start, close.end));
 			cursor = close.end;
 			scopes.pop(); // 上面的扫描已消费这个元素的闭合标签。
 		}
 	}
 	out.push(source.slice(cursor));
 	return out.join('');
-}
+});
 
 /** Manifest：解析 JSON，仅改写规范中的 URL 字段，不触碰名称/键/任意业务字符串。 */
-function rewriteJsonUrls(text, baseUrl, workerOrigin) {
+const rewriteJsonUrls = capRewriteGrowth((account, text, baseUrl, workerOrigin) => {
 	let manifest;
 	try { manifest = JSON.parse(text); } catch { return text; }
 	if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return text;
 	const fields = (obj, names) => {
 		if (!obj || typeof obj !== 'object') return;
 		for (const name of names) {
-			if (typeof obj[name] === 'string') obj[name] = rewriteUrl(obj[name], baseUrl, workerOrigin);
+			if (typeof obj[name] === 'string') obj[name] = account(obj[name].length, rewriteUrl(obj[name], baseUrl, workerOrigin));
 		}
 	};
 	const images = (list) => {
@@ -2651,7 +2651,7 @@ function rewriteJsonUrls(text, baseUrl, workerOrigin) {
 			const start = new URL(typeof manifest.start_url === 'string' ? manifest.start_url : '', baseUrl);
 			if (start.protocol === 'http:' || start.protocol === 'https:') idBase = start.origin + '/';
 		} catch {}
-		manifest.id = rewriteUrl(manifest.id, idBase, workerOrigin, true);
+		manifest.id = account(manifest.id.length, rewriteUrl(manifest.id, idBase, workerOrigin, true));
 	}
 	fields(manifest, ['start_url', 'scope']);
 	images(manifest.icons);
@@ -2673,7 +2673,7 @@ function rewriteJsonUrls(text, baseUrl, workerOrigin) {
 	fields(manifest.share_target, ['action']);
 	delete manifest.serviceworker;
 	return JSON.stringify(manifest);
-}
+});
 
 // ============================================================
 // 请求解析
