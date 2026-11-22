@@ -55,6 +55,21 @@ function createBrowser(globals = {}, cookieNs = '') {
 	return { ctx, errors, run };
 }
 
+test('shim: every spelling of a proxy-host URL is rebound to the target like on the server', () => {
+	const { ctx } = createBrowser();
+	const rp = ctx.window.__PE__.rp;
+	for (const input of [
+		'https://proxy.example/api?x=1', '//proxy.example/api?x=1', '/\\proxy.example/api?x=1',
+		'\\\\proxy.example/api?x=1', 'https:\\\\proxy.example\\api?x=1', 'http:proxy.example/api?x=1',
+	]) {
+		assert.equal(rp(input), proxy('/api?x=1'), input);
+	}
+	assert.equal(rp('wss://proxy.example/live'), origin + '/~' + encodeURIComponent('wss://example.com') + '/live');
+	// 其它协议即使主机名相同也不是代理地址。
+	assert.equal(rp('ftp://proxy.example/file'), 'ftp://proxy.example/file');
+	assert.equal(rp('app://proxy.example/open'), 'app://proxy.example/open');
+});
+
 test('shim: data/action/formaction are only rewritten on elements that load them', () => {
 	const { ctx } = createBrowser();
 	const el = tag => new ctx.Element(tag);

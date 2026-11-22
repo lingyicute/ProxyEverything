@@ -1152,7 +1152,6 @@ var search=urlSuffix(new URL(location.href)).split('#',1)[0];
 var full=DEC+(search?(DEC.indexOf('?')>=0?'&':'?')+search.substring(1):'');
 try{var u=new URL(full);if(u.protocol==='ws:')u.protocol='http:';else if(u.protocol==='wss:')u.protocol='https:';u.username='';u.password='';u.hostname=u.hostname.toLowerCase().replace(/\\.+$/,'');return u.href;}catch(e){return full;}
 }
-var ABS_RE=/^[a-z][a-z0-9+.-]*:\\/\\//i;
 var SKIP_RE=/^(data:|blob:|javascript:|mailto:|tel:|sms:|about:|#)/i;
 function base(){
   var target=currentTarget();
@@ -1203,20 +1202,22 @@ function rp(v){
   if(!s||SKIP_RE.test(s))return s;
   if(isProxiedPath(s)){try{return normProxied(s,false);}catch(e){return s;}}
   var forcedWs='';
+  var b;try{b=base();}catch(e){return s;}
   try{
     if(s===WO)s='/';
-    else if(ABS_RE.test(s)||s.indexOf('//')===0){
-      var pu=new URL(s,WO);
-      if(isSelfHost(pu)){
+    else{
+      /* 与服务端一致：先按文档基址解析，再判断是否落回代理域；反斜线或省略斜线的写法同样指向代理自身 */
+      var pu=new URL(s,b);
+      if((pu.protocol==='http:'||pu.protocol==='https:'||pu.protocol==='ws:'||pu.protocol==='wss:')&&isSelfHost(pu)){
         var rawSelf=s.replace(/^(?:[a-z][a-z0-9+.-]*:)?\\/\\/[^/?#]*/i,'');
         if(isProxiedPath(pu.pathname)||isProxiedPath(rawSelf))return normProxied(s,true);
         if(pu.protocol==='ws:'||pu.protocol==='wss:')forcedWs=pu.protocol;
         // 用完整来源拼接：已解析路径开头的双斜线不是新的主机名。
-        s=new URL(base()).origin+pu.pathname+urlSuffix(pu);
+        s=new URL(b).origin+pu.pathname+urlSuffix(pu);
       }
     }
   }catch(e){}
-  var u;try{u=new URL(s,base());}catch(e){return s;}
+  var u;try{u=new URL(s,b);}catch(e){return s;}
   if(u.origin===WO&&isProxiedPath(u.pathname))return u.href;
   var p=forcedWs?(u.protocol==='http:'?'ws:':'wss:'):u.protocol;
   if(p!=='http:'&&p!=='https:'&&p!=='ws:'&&p!=='wss:')return s;
