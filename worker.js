@@ -295,6 +295,10 @@ function rewriteUrl(value, baseUrl, workerOrigin, resolveEmptyOrFragment = false
 	}
 }
 
+function isSrcsetSpace(ch) {
+	return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f';
+}
+
 /**
  * 重写 srcset："url 1x, url 2x" / "url 320w, ..." / "url1,url2"
  *
@@ -311,10 +315,6 @@ function rewriteUrl(value, baseUrl, workerOrigin, resolveEmptyOrFragment = false
  *      该候选项到此结束（没有描述符）；
  *   4. 否则其后跟随描述符，直到「括号外的」逗号或字符串结束。
  */
-function isSrcsetSpace(ch) {
-	return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f';
-}
-
 function mapSrcset(s, rewrite) {
 	const n = s.length;
 	let out = '';
@@ -2332,10 +2332,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 // CSS Syntax §3.2 指定字节签名而非一般 at-rule；含终止符最多 1024 字节。
 const CSS_CHARSET_SIGNATURE = /^@charset "([\x00-\x21\x23-\x7f]{0,1012})";/;
 
-/**
- * 限制整体缓冲的原始输入字节量；不信任 Content-Length（可缺失/虚报）。
- * 超过 2 MiB 上限时把已读分片与剩余流无缝拼接，原样透传正文及其表示元数据。
- */
+/** 整体缓冲文本的编码：BOM > HTTP charset > CSS @charset 或 XML 声明，默认 UTF-8。 */
 function sniffTextCharset(bytes, kind, declaredCharset = null) {
 	const head = bytes.subarray(0, kind === 'css' ? 1024 : kind === 'svg' ? 4096 : 256);
 	if (head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
@@ -2381,6 +2378,10 @@ function replayBody(reader, prefix, tail) {
 	});
 }
 
+/**
+ * 限制整体缓冲的原始输入字节量；不信任 Content-Length（可缺失/虚报）。
+ * 超过 2 MiB 上限时把已读分片与剩余流无缝拼接，原样透传正文及其表示元数据。
+ */
 async function readTransformText(body, kind = '', declaredCharset = null) {
 	if (!body) return { text: '', passthrough: null };
 	const reader = body.getReader();
