@@ -90,8 +90,8 @@ test('speculationrules: preserves selectors and both URL resolution bases', () =
 	const documentUrl = 'https://example.com/page/index.html';
 	const value = {
 		prefetch: [
-			{ source: 'list', urls: ['./next.html'] },
-			{ source: 'list', relative_to: 'document', urls: ['./next.html'] },
+			{ source: 'list', urls: ['./next.html', '', '#part'] },
+			{ source: 'list', relative_to: 'document', urls: ['./next.html', ''] },
 		],
 		prerender: [{ source: 'document', where: { selector_matches: selector } }],
 	};
@@ -99,8 +99,8 @@ test('speculationrules: preserves selectors and both URL resolution bases', () =
 	assert.ok(!output.includes('<'));
 	assert.deepEqual(JSON.parse(output), {
 		prefetch: [
-			{ source: 'list', urls: [proxy('/assets/next.html')] },
-			{ source: 'list', relative_to: 'document', urls: [proxy('/page/next.html')] },
+			{ source: 'list', urls: [proxy('/assets/next.html'), proxy('/assets/'), proxy('/assets/#part')] },
+			{ source: 'list', relative_to: 'document', urls: [proxy('/page/next.html'), proxy('/page/index.html')] },
 		],
 		prerender: value.prerender,
 	});
