@@ -330,3 +330,22 @@ test('leaked relative WebSocket handshakes are forwarded instead of redirected',
 	}), { ALLOWED_TARGET_ORIGINS: 'https://example.com' });
 	assert.equal(plain.status, 307);
 });
+
+test('a leaked "/" from a proxied page reaches the target root instead of the homepage', async t => {
+	t.mock.method(globalThis, 'fetch', async () => { throw new Error('upstream down'); });
+	const env = { ALLOWED_TARGET_ORIGINS: 'https://example.com' };
+	const leaked = await worker.fetch(new Request('https://proxy.example/?next=1', {
+		method: 'POST', body: 'a=1', headers: { Referer: proxy('https://example.com/app/page') },
+	}), env);
+	assert.equal(leaked.status, 307);
+	assert.equal(leaked.headers.get('location'), proxy('https://example.com/?next=1'));
+	for (const headers of [{}, { Referer: 'https://proxy.example/' }, { Referer: proxy('https://denied.example/') }]) {
+		const home = await worker.fetch(new Request('https://proxy.example/', { headers }), env);
+		assert.equal(home.status, 200);
+		assert.match(await home.text(), /id="urlForm"/);
+	}
+	// The error page lives on a proxied URL; its home link must not be mistaken for the target root.
+	const failed = await worker.fetch(new Request(proxy('https://example.com/app/page')), env);
+	assert.equal(failed.status, 502);
+	assert.match(await failed.text(), /<a [^>]*href="\/" rel="noreferrer"/);
+});

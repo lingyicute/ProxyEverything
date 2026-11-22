@@ -2214,15 +2214,10 @@ export default {
 			return new Response(null, { status: 204, headers });
 		}
 
-		// ---- 首页 ----
-		if (url.pathname === '/' || url.pathname === '') {
-			return new Response(request.method === 'HEAD' ? null : getRootHtml(), {
-				headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
-			});
-		}
+		const isWebSocket = (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket';
 
 		// ---- robots.txt：允许收录首页，禁止抓取代理目标路径以防耗尽 Worker 配额 ----
-		if (url.pathname === '/robots.txt') {
+		if (!isWebSocket && url.pathname === '/robots.txt') {
 			return new Response(request.method === 'HEAD' ? null :
 `User-agent: *
 Allow: /
@@ -2241,7 +2236,6 @@ Disallow: /wss%3A
 
 		// ---- 漏网的站内相对请求：innerHTML、location.href = '/x'、Worker 内请求、默认 /favicon.ico 等未经改写的地址
 		//      会直接落到代理域。路径不带协议而 Referer 是代理页面时，按来源页的目标站点还原并重定向 ----
-		const isWebSocket = (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket';
 		let refererRouted = null;
 		if (!/^(?:https?|wss?):\/\//i.test(safeDecode(url.pathname.substring(1)).trim().replace(/^\/+/, ''))) {
 			const refTarget = refererTarget(request, workerOrigin, env);
@@ -2256,8 +2250,15 @@ Disallow: /wss%3A
 			}
 		}
 
+		// ---- 首页：代理页面发出的 "/"（location.href = '/'、fetch('/') 等）已在上面还原为目标站根路径 ----
+		if (!isWebSocket && (url.pathname === '/' || url.pathname === '')) {
+			return new Response(request.method === 'HEAD' ? null : getRootHtml(), {
+				headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+			});
+		}
+
 		// ---- favicon 等杂项，避免被当成目标域名 ----
-		if (!refererRouted && /^\/(favicon\.ico|sitemap\.xml|apple-touch-icon.*\.png|\.well-known\/.*)$/i.test(url.pathname)) {
+		if (!refererRouted && (url.pathname === '/robots.txt' || /^\/(favicon\.ico|sitemap\.xml|apple-touch-icon.*\.png|\.well-known\/.*)$/i.test(url.pathname))) {
 			return new Response(null, { status: 404 });
 		}
 
@@ -2992,6 +2993,7 @@ ${md3Overlays()}
 }
 
 // ---- 错误页 ----
+// “返回首页”不带 Referer：来自代理页面的 "/" 会被还原为目标站根路径。
 function renderErrorPage(title, message) {
 	return md3Head(title + ' · ProxyEverything', 'ProxyEverything 错误提示', 'noindex, nofollow') + `
 <body>
@@ -3002,7 +3004,7 @@ function renderErrorPage(title, message) {
     <p class="t-body-md muted">${message}</p>
     <div class="actions">
       <button class="text-btn md-ripple" type="button" onclick="location.reload()"><span class="t-label-lg">重试</span></button>
-      <a class="tonal-btn md-ripple" href="/"><span class="t-label-lg">返回首页</span></a>
+      <a class="tonal-btn md-ripple" href="/" rel="noreferrer"><span class="t-label-lg">返回首页</span></a>
     </div>
   </section>
 </div>
