@@ -19,7 +19,7 @@ export default {
       return new Response('<!doctype html><head></head><body><template><template><base href="/nested/"></template><base href="/inert/"></template><svg><base href="/foreign/"/></svg><img src="first.png"><base href="/assets/"><img src="second.png"></body>', { headers: { 'Content-Type': 'text/html' } });
     }
     if (url.pathname === '/xhtml') {
-      const xml = '<?xml version="1.0" encoding="windows-1252"?><html xmlns="http://www.w3.org/1999/xhtml"><head><style>a{background:url(pic.png?x=1&amp;y=2)}</style></head><body>Caf\u00e9</body></html>';
+      const xml = '<?xml version="1.0" encoding="windows-1252"?><html xmlns="http://www.w3.org/1999/xhtml"><head><style>a{background:url(pic.png?x=1&amp;y=2)}</style><script type="module">/*<![CDATA[*/ import "./mod.js"; /*]]>*/</script></head><body>Caf\u00e9</body></html>';
       return new Response(Uint8Array.from(xml, c => c.charCodeAt(0)), { headers: { 'Content-Type': 'application/xhtml+xml' } });
     }
     if (url.pathname === '/xhtml-fragment') {
@@ -83,6 +83,7 @@ test('real Workerd: HTML, compressed HTTP, URL encoding and WebSocket', {
 	assert.match(xml, /^<\?xml version="1\.0" encoding="UTF-8"\?>/);
 	assert.match(xml, /Caf\u00e9/);
 	assert.ok(xml.includes(proxy + '/pic.png?x=1&amp;y=2'));
+	assert.ok(xml.includes(proxy + '/mod.js'));
 
 	const xhtmlFrag = await (await runtime.dispatchFetch(proxy + '/xhtml-fragment')).text();
 	assert.match(xhtmlFrag, /^<div xmlns="http:\/\/www\.w3\.org\/1999\/xhtml"><script xmlns="http:\/\/www\.w3\.org\/1999\/xhtml">/);

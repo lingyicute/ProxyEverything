@@ -519,3 +519,13 @@ test('HTML meta charset prescan follows WHATWG pragma and attribute precedence r
 		await sniffed.body.cancel();
 	}
 });
+
+test('XML scripts and styles rewrite across comment-guarded CDATA and bare query ampersands', () => {
+	const cdataModule = '<svg><script type="module">/*<![CDATA[*/ import "./a.js?x=1&y=2"; /*]]>*/</script></svg>';
+	const out = rewriteSvg(cdataModule, base, origin);
+	assert.ok(out.includes(proxy('./a.js?x=1&y=2')));
+	assert.equal(
+		rewriteXmlText('import "./a.js?x=1&amp;y=2";', js => rewriteJsModuleSpecifiers(js, base, origin)),
+		`import "${proxy('./a.js?x=1&amp;y=2')}";`
+	);
+});

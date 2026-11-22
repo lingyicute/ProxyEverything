@@ -2626,27 +2626,60 @@ function readXmlTextEnd(source, start, qualifiedName) {
 }
 
 const rewriteXmlText = capRewriteGrowth((account, body, transform) => {
-	const rewritePart = (part) => {
-		if (hasCustomXmlEntity(part)) return part;
-		const decoded = decodeXmlEntities(part);
-		const out = transform(decoded);
-		return out === decoded ? part : out.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/]]>/g, ']]&gt;');
-	};
+	const escapeXmlText = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/]]>/g, ']]&gt;');
 	let out = '';
 	let last = 0;
+	let sawCustom = false;
+	let hasCdata = false;
+	const decodedParts = [];
+	const transformedParts = [];
+	const pushText = (part) => {
+		if (!part && decodedParts.length) return '';
+		if (hasCustomXmlEntity(part)) { sawCustom = true; return part; }
+		const decoded = decodeXmlEntities(part);
+		const next = transform(decoded);
+		if (part) {
+			decodedParts.push(decoded);
+			transformedParts.push(next);
+		}
+		return next === decoded ? part : escapeXmlText(next);
+	};
 	const opener = /<!\[CDATA\[|<!--/g;
 	let match;
 	while ((match = opener.exec(body))) {
 		const cdata = match[0] === '<![CDATA[';
 		const end = body.indexOf(cdata ? ']]>' : '-->', opener.lastIndex);
 		if (end < 0) return body;
-		out += account(match.index - last, rewritePart(body.slice(last, match.index)));
-		out += cdata
-			? account(end + 3 - match.index, `<![CDATA[${transform(body.slice(opener.lastIndex, end)).replace(/]]>/g, ']]]]><![CDATA[>')}]]>`)
-			: body.slice(match.index, end + 3);
+		const before = body.slice(last, match.index);
+		if (before) out += account(before.length, pushText(before));
+		if (cdata) {
+			hasCdata = true;
+			const inner = body.slice(opener.lastIndex, end);
+			const next = transform(inner);
+			if (inner) {
+				decodedParts.push(inner);
+				transformedParts.push(next);
+			}
+			out += account(end + 3 - match.index, `<![CDATA[${next.replace(/]]>/g, ']]]]><![CDATA[>')}]]>`);
+		} else {
+			out += body.slice(match.index, end + 3);
+		}
 		last = opener.lastIndex = end + 3;
 	}
-	return out + account(body.length - last, rewritePart(body.slice(last)));
+	const tail = body.slice(last);
+	if (tail || !out) out += account(tail.length, pushText(tail));
+	// /*<![CDATA[*/ ... /*]]>*/ 等写法把同一段源码拆在多段文本间；逐段改写失配时按拼接后的 XML 字符数据改写。
+	if (!sawCustom && decodedParts.length > 1) {
+		const combined = decodedParts.join('');
+		const combinedOut = transform(combined);
+		if (combinedOut !== transformedParts.join('')) {
+			const serialized = hasCdata
+				? `<![CDATA[${combinedOut.replace(/]]>/g, ']]]]><![CDATA[>')}]]>`
+				: escapeXmlText(combinedOut);
+			return account(body.length, serialized);
+		}
+	}
+	return out;
 });
 
 /** 独立 SVG 文档：重写引用属性和样式，保留不理解的 XML 声明与实体。 */
