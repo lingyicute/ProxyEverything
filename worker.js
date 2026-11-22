@@ -3069,13 +3069,6 @@ export default {
 
 		const isWebSocket = (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket';
 
-		// ---- 首页 ----
-		if (!isWebSocket && (url.pathname === '/' || url.pathname === '')) {
-			return new Response(request.method === 'HEAD' ? null : getRootHtml(), {
-				headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
-			});
-		}
-
 		// ---- robots.txt：允许收录首页，禁止抓取代理目标路径以防耗尽 Worker 配额 ----
 		if (!isWebSocket && url.pathname === '/robots.txt') {
 			return new Response(request.method === 'HEAD' ? null :
@@ -3102,6 +3095,13 @@ Disallow: /
 					headers: { 'Location': toProxyUrl(leaked.href, workerOrigin), 'Cache-Control': 'no-store' },
 				});
 			}
+		}
+
+		// ---- 首页：代理页面发出的 "/"（location.href = '/'、fetch('/') 等）已在上面还原为目标站根路径 ----
+		if (!isWebSocket && (url.pathname === '/' || url.pathname === '')) {
+			return new Response(request.method === 'HEAD' ? null : getRootHtml(), {
+				headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+			});
 		}
 
 		// ---- favicon 等杂项，避免被当成目标域名 ----
@@ -3805,6 +3805,7 @@ ${browserPathHelpers()}
 }
 
 // ---- 错误页 ----
+// “返回首页”不带 Referer：来自代理页面的 "/" 会被还原为目标站根路径。
 function renderErrorPage(title, message) {
 	return md3Head(title + ' · ProxyEverything', 'ProxyEverything 错误提示', 'noindex, nofollow') + `
 <body>
@@ -3815,7 +3816,7 @@ function renderErrorPage(title, message) {
     <p class="t-body-md muted">${message}</p>
     <div class="actions">
       <button class="text-btn md-ripple" type="button" onclick="location.reload()"><span class="t-label-lg">重试</span></button>
-      <a class="tonal-btn md-ripple" href="/"><span class="t-label-lg">返回首页</span></a>
+      <a class="tonal-btn md-ripple" href="/" rel="noreferrer"><span class="t-label-lg">返回首页</span></a>
     </div>
   </section>
 </div>
