@@ -137,3 +137,9 @@ test('XHTML attribute writes keep tab and newline references from XML normalizat
 	for (const h of collectHandlers()['*']) h.element(html);
 	assert.equal(html.getAttribute('style'), `background:url(&quot;${proxy('/dir/a.png')}&quot;)`);
 });
+
+test('HTML ping lists split on ASCII whitespace and preserve a non-ASCII path space', () => {
+	const link = element('a', { ping: ' /a\u00a0b\t/next  ' });
+	collectHandlers().a[0].element(link);
+	assert.equal(link.getAttribute('ping'), ` ${proxy('/a%C2%A0b')}\t${proxy('/next')}  `);
+});

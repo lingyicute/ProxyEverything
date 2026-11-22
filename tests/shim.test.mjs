@@ -268,3 +268,10 @@ test('navigation property setters follow the same base and empty URL rules as at
 		assert.equal(control.value, proxy('/other/#section'));
 	}
 });
+
+test('DOM ping lists retain Unicode URL characters and ASCII separators', () => {
+	const { ctx } = createBrowser();
+	const a = new ctx.Element('a');
+	a.setAttribute('ping', ' /a\u00a0b\t/next ');
+	assert.equal(a.getAttribute('ping'), ` ${proxy('/a%C2%A0b')}\t${proxy('/next')} `);
+});

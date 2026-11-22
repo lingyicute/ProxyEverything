@@ -340,6 +340,14 @@ const rewriteSrcset = capRewriteGrowth((account, value, baseUrl, workerOrigin) =
 	return mapSrcset(String(value), url => account(url.length, rewriteUrl(url, baseUrl, workerOrigin)));
 });
 
+// HTML 的空白分隔 URL 列表只把 ASCII 空白当作分隔符，保留原来的分隔字节。
+function mapPingUrls(value, rewrite) {
+	return value.replace(/[^ \t\r\n\f]+/g, url => rewrite(url));
+}
+
+const rewritePing = capRewriteGrowth((account, value, baseUrl, workerOrigin) =>
+	mapPingUrls(value, url => account(url.length, rewriteUrl(url, baseUrl, workerOrigin))));
+
 /** CSS 字符串不能直接沿用源引号：解析相对地址后可能从基地址继承 ' 或括号，并转义 <、> 防逸出。 */
 function quoteCssString(value) {
 	return '"' + String(value).replace(/["\\<>\x00-\x1f\x7f]/g, ch =>
@@ -1275,11 +1283,8 @@ if(oWo)window.open=function(u){try{if(arguments.length&&u!=null)arguments[0]=rwU
 try{var oAs=location.assign.bind(location);location.assign=function(u){return oAs(typeof u==='string'&&!trimUrlSpace(u)?rp(base()):rp(u));};}catch(e){}
 try{var oRe=location.replace.bind(location);location.replace=function(u){return oRe(typeof u==='string'&&!trimUrlSpace(u)?rp(base()):rp(u));};}catch(e){}
 /* ---- DOM 属性 setter 拦截：img.src = "..." 等动态赋值 ---- */
-function rwPing(v){
-  if(typeof v!=='string')return v;
-  var t=v.trim();
-  return t?t.split(/\\s+/).map(rp).join(' '):v;
-}
+${mapPingUrls.toString()}
+function rwPing(v){return typeof v==='string'?mapPingUrls(v,rp):v;}
 function rwAnchorArg(v){return typeof v==='string'||v instanceof URL?rwNavigation(String(v),true):v;}
 function rwFormArg(v){return typeof v==='string'||v instanceof URL?rwNavigation(String(v),false):v;}
 function patchSetter(ctor,prop,rewrite=rwUrlArg){
@@ -2131,9 +2136,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 					if (kind === 'srcset') {
 						next = rewriteSrcset(v, baseHref, workerOrigin);
 					} else if (kind === 'ping') {
-						const trimmed = v.trim();
-						if (!trimmed) continue;
-						next = trimmed.split(/\s+/).map(rw).join(' ');
+						next = rewritePing(v, baseHref, workerOrigin);
 					} else {
 						const trimmed = trimUrlSpace(v);
 						const isFormAction = attr === 'action' || attr === 'formaction';
@@ -2634,7 +2637,7 @@ const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => 
 			if (name === 'xml:base' && localName) next = rewriteUrl(elementBase, baseUrl, workerOrigin);
 			else if (XML_REFERENCE_ATTRS.has(name) || xlinkHref) next = rw(decoded);
 			else if (name === 'srcset' || name === 'imagesrcset') next = rewriteSrcset(decoded, elementBase, workerOrigin);
-			else if (name === 'ping' && decoded.trim()) next = decoded.trim().split(/\s+/).map(rw).join(' ');
+			else if (name === 'ping') next = rewritePing(decoded, elementBase, workerOrigin);
 			else if (SVG_CSS_ATTRS.has(name)) next = rewriteStyleAttr(decoded, elementBase, workerOrigin);
 			return next === undefined || next === decoded ? m : account(m.length, `${space}${name}${equals}"${escapeXmlAttr(next)}"`);
 		}));
