@@ -441,3 +441,16 @@ test('XML charset detection does not depend on the upstream chunk boundaries', a
 		}
 	}
 });
+
+test('failed subrequests return non-cacheable errors without internal exception text', async t => {
+	const diagnostic = 'private runtime diagnostic';
+	t.mock.method(globalThis, 'fetch', async () => { throw new Error(diagnostic); });
+	for (const headers of [{}, { Upgrade: 'websocket' }]) {
+		const response = await worker.fetch(new Request(proxy(base), { headers }), {
+			ALLOWED_TARGET_ORIGINS: 'https://example.com',
+		});
+		assert.equal(response.status, 502);
+		assert.equal(response.headers.get('Cache-Control'), 'no-store');
+		assert.ok(!(await response.text()).includes(diagnostic));
+	}
+});

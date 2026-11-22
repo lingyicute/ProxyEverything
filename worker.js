@@ -2944,8 +2944,10 @@ Disallow: /
 			});
 			try {
 				return await handleWebSocket(request, targetUrl, ck, workerOrigin, env);
-			} catch (e) {
-				return new Response('WebSocket 代理失败: ' + e.message, { status: 502 });
+			} catch {
+				return new Response('WebSocket 代理失败：无法连接上游', {
+					status: 502, headers: { 'Cache-Control': 'no-store' },
+				});
 			}
 		}
 
@@ -2974,8 +2976,8 @@ Disallow: /
 				// 响应的 no-store 无法阻止 fetch 先命中 Cloudflare 的上游缓存。
 				cache: ck.hasCookie || fwdHeaders.has('authorization') ? 'no-store' : undefined,
 			});
-		} catch (e) {
-			return errorPage(targetUrl.href, e);
+		} catch {
+			return errorPage();
 		}
 
 		// ---- 重定向 ----
@@ -3056,8 +3058,8 @@ Disallow: /
 				return applyCommon(transformHtml(interim, baseUrl, workerOrigin, ck), request, ck);
 			}
 			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, kind, request, charset), request, ck);
-		} catch (error) {
-			return errorPage(targetUrl.href, error);
+		} catch {
+			return errorPage();
 		}
 	},
 };
@@ -3091,10 +3093,10 @@ function invalidTargetPage(url, reason) {
 	), { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
-function errorPage(targetHref, err) {
+function errorPage() {
 	return new Response(renderErrorPage(
 		'请求上游失败',
-		`代理请求 ${escapeHtml(targetHref)} 时出错：${escapeHtml(err && err.message ? err.message : String(err))}。<br>目标站点可能拒绝了来自 Cloudflare 的请求，或暂时不可用。`
+		'无法处理上游响应。目标站点可能拒绝了来自 Cloudflare 的请求，或暂时不可用。'
 	), { status: 502, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
