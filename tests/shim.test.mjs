@@ -289,3 +289,20 @@ test('history state updates resolve empty URLs against base and block dot-segmen
 	assert.equal(calls[2], '/~https%3A%2F%2Fexample.com/other.example/inside');
 	assert.throws(() => ctx.history.pushState(null, '', '/~https%3A%2F%2Fother.example/x'), { name: 'SecurityError' });
 });
+
+test('shim ignores foreign base elements and freezes at the first HTML base with href', () => {
+	const { ctx } = createBrowser();
+	const svgBase = Object.assign(new ctx.Element('base'), { namespaceURI: 'http://www.w3.org/2000/svg' });
+	svgBase.setAttribute('href', '/foreign/');
+	assert.equal(svgBase.getAttribute('href'), '/foreign/');
+	assert.equal(svgBase.getAttribute('data-pe-base'), null);
+
+	const firstBase = Object.assign(new ctx.Element('base'), { namespaceURI: 'http://www.w3.org/1999/xhtml' });
+	firstBase.setAttribute('href', 'javascript:void(0)');
+	const secondBase = Object.assign(new ctx.Element('base'), { namespaceURI: 'http://www.w3.org/1999/xhtml' });
+	secondBase.setAttribute('href', 'https://other.example/sub/');
+	ctx.document.querySelectorAll = () => [svgBase, firstBase, secondBase];
+	assert.equal(ctx.window.__PE__.rp('rel.js'), proxy('/dir/rel.js'));
+	firstBase.removeAttribute('href');
+	assert.equal(ctx.window.__PE__.rp('rel.js'), origin + '/~' + encodeURIComponent('https://other.example') + '/sub/rel.js');
+});
