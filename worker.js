@@ -2811,7 +2811,8 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin, env) {
 	headers.set('Upgrade', 'websocket');
 
 	// 自动跟随重定向可能把手工转发的 Cookie 带到另一个站点。
-	const resp = await fetch(upstreamUrl.href, { headers, redirect: 'manual', signal: request.signal });
+	// 握手必须到达上游，不能命中同地址的普通 GET 或旧的握手拒绝响应。
+	const resp = await fetch(upstreamUrl.href, { headers, redirect: 'manual', signal: request.signal, cache: 'no-store' });
 	const upstream = resp.webSocket;
 	if (!upstream) {
 		if (resp.body) resp.body.cancel().catch(() => {});

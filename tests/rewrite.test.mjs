@@ -184,6 +184,7 @@ test('WebSocket forwards only an HTTP(S) source established by the referring pag
 		if (source) headers.referer = source;
 		assert.equal((await send(target, { headers })).status, 502, 'the stub does not upgrade');
 		assert.equal(forwarded.url, 'https://example.com/socket');
+		assert.equal(forwarded.cache, 'no-store');
 		assert.equal(forwarded.headers.get('sec-websocket-key'), null);
 		assert.equal(forwarded.headers.get('sec-websocket-protocol'), 'chat');
 		assert.equal(forwarded.headers.get('origin'), expected);
