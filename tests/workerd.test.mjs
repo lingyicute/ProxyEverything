@@ -15,6 +15,9 @@ export default {
       headers.append('Set-Cookie', 'second=two; Secure');
       return new Response('<!doctype html><head><base href="/assets/"></head><body><img src="a&#47;b.png?x=1&amp;y=2"><form action=""></form></body>', { headers });
     }
+    if (url.pathname === '/template-base') {
+      return new Response('<!doctype html><head></head><body><template><template><base href="/nested/"></template><base href="/inert/"></template><svg><base href="/foreign/"/></svg><img src="first.png"><base href="/assets/"><img src="second.png"></body>', { headers: { 'Content-Type': 'text/html' } });
+    }
     if (url.pathname === '/xhtml') {
       const xml = '<?xml version="1.0" encoding="windows-1252"?><html xmlns="http://www.w3.org/1999/xhtml"><head><style>a{background:url(pic.png?x=1&amp;y=2)}</style></head><body>Caf\u00e9</body></html>';
       return new Response(Uint8Array.from(xml, c => c.charCodeAt(0)), { headers: { 'Content-Type': 'application/xhtml+xml' } });
@@ -64,6 +67,11 @@ test('real Workerd: HTML, compressed HTTP, URL encoding and WebSocket', {
 	assert.ok(html.includes('src="' + proxy + '/assets/a/b.png?x=1&amp;y=2"'));
 	assert.match(html, /<form action="">/);
 	assert.equal(page.headers.getSetCookie().length, 2);
+
+	const templates = await (await runtime.dispatchFetch(proxy + '/template-base')).text();
+	assert.ok(templates.includes('<base href="/inert/">'));
+	assert.ok(templates.includes('src="' + proxy + '/first.png"'));
+	assert.ok(templates.includes('src="' + proxy + '/assets/second.png"'));
 
 	const xhtml = await runtime.dispatchFetch(proxy + '/xhtml');
 	const xml = await xhtml.text();

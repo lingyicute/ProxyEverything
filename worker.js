@@ -1998,6 +1998,8 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 	const rawText = (text, transform) => isXml ? rewriteXmlText(text, transform) : transform(text);
 	let baseHref = baseUrl;
 	let hasBaseHref = false;
+	let templateDepth = 0;
+	const htmlNamespace = 'http://www.w3.org/1999/xhtml';
 	let injected = false;
 	const shim = getShimScript(workerOrigin, ck ? ck.ns : '');
 	const rw = (v) => rewriteUrl(v, baseHref, workerOrigin);
@@ -2014,9 +2016,19 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 		},
 	});
 
-	// 只采纳第一个合法 HTTP(S) href；保留 target 与原始基地址供 shim 使用，移除原生 href。
+	// template 内容不是活动文档的一部分；嵌套模板也不能改变文档基地址。
+	rewriter.on('template', {
+		element(el) {
+			if (el.namespaceURI !== htmlNamespace) return;
+			templateDepth++;
+			el.onEndTag(() => { templateDepth--; });
+		},
+	});
+
+	// 只采纳活动文档内第一个合法 HTTP(S) href，保留 target 与原始基地址供 shim 使用。
 	rewriter.on('base', {
 		element(el) {
+			if (templateDepth || el.namespaceURI !== htmlNamespace) return;
 			const h = getHtmlAttribute(el, 'href', isXml);
 			if (h != null && !hasBaseHref) {
 				try {

@@ -32,6 +32,7 @@ function element(tag, attrs) {
 	const writes = [];
 	return {
 		tagName: tag,
+		namespaceURI: 'http://www.w3.org/1999/xhtml',
 		writes,
 		get attributes() { return map.entries(); },
 		getAttribute: name => (map.has(name) ? map.get(name) : null),
