@@ -504,3 +504,18 @@ test('dot segments in already-proxied URLs stay clamped within their target orig
 		'https://proxy.example/~https%3A%2F%2Fcdn.example/asset.js'
 	);
 });
+
+test('HTML meta charset prescan follows WHATWG pragma and attribute precedence rules', async () => {
+	for (const [html, expected] of [
+		['<meta http-equiv="Content-Type" content="charset=gbk">', 'gbk'],
+		['<meta charset="" http-equiv="content-type" content="text/html; charset=gbk">', 'gbk'],
+		['<meta charset="invalid-label" http-equiv="content-type" content="text/html; charset=gbk">', 'gbk'],
+		['<meta content="text/html; charset=gbk" http-equiv="Content-Type">', 'gbk'],
+		['<meta content="text/html; charset=gbk"><meta charset="windows-1252">', 'windows-1252'],
+		['<meta content="text/html; charset=gbk" charset="windows-1252"><meta charset="utf-8">', 'utf-8'],
+	]) {
+		const sniffed = await sniffHtmlCharset(new Response(html).body);
+		assert.equal(sniffed.charset, expected, html);
+		await sniffed.body.cancel();
+	}
+});

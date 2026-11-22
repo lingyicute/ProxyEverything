@@ -788,9 +788,32 @@ function getCharset(contentType, fromMeta = false) {
 	return null;
 }
 
+/** HTML 规范「从 meta 元素提取编码」：不要求前置分号，引号未闭合时放弃。 */
+function extractMetaCharset(content) {
+	const s = String(content || '');
+	const re = /charset/gi;
+	for (let m; (m = re.exec(s));) {
+		let i = m.index + 7;
+		while (i < s.length && isSrcsetSpace(s[i])) i++;
+		if (s[i] !== '=') { re.lastIndex = i; continue; }
+		i++;
+		while (i < s.length && isSrcsetSpace(s[i])) i++;
+		const quote = s[i];
+		if (quote === '"' || quote === "'") {
+			const end = s.indexOf(quote, i + 1);
+			return end < 0 ? null : normalizeCharsetLabel(s.slice(i + 1, end), true);
+		}
+		let end = i;
+		while (end < s.length && !isSrcsetSpace(s[end]) && s[end] !== ';') end++;
+		return normalizeCharsetLabel(s.slice(i, end), true);
+	}
+	return null;
+}
+
 function scanHtmlPrescanAttrs(text, start, collect) {
 	let i = start;
-	const attrs = collect ? Object.create(null) : null;
+	const attrs = collect ? [] : null;
+	const seen = collect ? new Set() : null;
 	while (i < text.length) {
 		while (isSrcsetSpace(text[i]) || text[i] === '/') i++;
 		if (text[i] === '>') return { end: i + 1, attrs };
@@ -814,7 +837,10 @@ function scanHtmlPrescanAttrs(text, start, collect) {
 				if (collect) value = text.slice(valueStart, i);
 			}
 		}
-		if (collect && !Object.hasOwn(attrs, name)) attrs[name] = value;
+		if (collect && name && !seen.has(name)) {
+			seen.add(name);
+			attrs.push([name, value]);
+		}
 	}
 	return null;
 }
@@ -847,11 +873,18 @@ function prescanHtmlCharset(text) {
 		if (!scanned) return null;
 		start = scanned.end;
 		if (!meta) continue;
-		const attrs = scanned.attrs;
-		const encoding = Object.hasOwn(attrs, 'charset')
-			? normalizeCharsetLabel(attrs.charset, true)
-			: attrs['http-equiv']?.toLowerCase() === 'content-type' ? getCharset(attrs.content, true) : null;
-		if (encoding) return encoding;
+		let gotPragma = false, needPragma = null, charset = null;
+		for (const [name, value] of scanned.attrs) {
+			if (name === 'http-equiv' && value.toLowerCase() === 'content-type') gotPragma = true;
+			else if (name === 'content' && charset === null) {
+				const candidate = extractMetaCharset(value);
+				if (candidate) { charset = candidate; needPragma = true; }
+			} else if (name === 'charset' && charset === null) {
+				const candidate = normalizeCharsetLabel(value, true);
+				if (candidate) { charset = candidate; needPragma = false; }
+			}
+		}
+		if (needPragma !== null && (!needPragma || gotPragma)) return charset;
 	}
 	return null;
 }
@@ -2145,7 +2178,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			}
 			if (he === 'content-type') {
 				const c = getHtmlAttribute(el, 'content', isXml);
-				if (c) setHtmlAttribute(el, 'content', c.replace(/charset\s*=\s*[^;]*/i, 'charset=UTF-8'), isXml);
+				if (c) setHtmlAttribute(el, 'content', c.replace(/charset\s*=\s*[^;]*/gi, 'charset=UTF-8'), isXml);
 			}
 			if (getHtmlAttribute(el, 'charset', isXml) != null) {
 				setHtmlAttribute(el, 'charset', 'UTF-8', isXml);
