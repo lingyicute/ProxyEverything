@@ -288,3 +288,17 @@ test('bodyless revalidation preserves the request cache policy variant without C
 	assert.equal(refreshed.headers.get('Vary'), raw.headers.get('Vary'));
 	assert.equal(refreshed.headers.get('ETag'), raw.headers.get('ETag'));
 });
+
+test('SameSite=None and Partitioned cookies require an upstream Secure attribute', async () => {
+	const headers = new Headers({ 'content-type': 'text/plain' });
+	for (const cookie of ['cross=1; SameSite=None', 'chips=2; Partitioned',
+		'valid=3; SameSite=None; Secure', 'part=4; Secure; Partitioned', 'lax=5; SameSite=None; SameSite=Lax']) {
+		headers.append('Set-Cookie', cookie);
+	}
+	const r = await fetchThrough('https://example.com/cookies', headers);
+	const values = r.headers.getSetCookie();
+	assert.equal(values.length, 3);
+	assert.match(values[0], /_valid=3; Secure; SameSite=None;/);
+	assert.match(values[1], /_part=4; Secure; Partitioned;/);
+	assert.match(values[2], /_lax=5; SameSite=Lax;/);
+});

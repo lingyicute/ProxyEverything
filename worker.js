@@ -617,7 +617,7 @@ function scopeSetCookie(c, ns, workerIsHttps, fromScript = false) {
 	const prefix = reservedCookiePrefix(name);
 	const out = [`${prefix}${ns}${name.slice(prefix.length)}=${value}`];
 	let path = null, hasDomain = false, hasHttpOnly = false;
-	let sameSiteNone = false;
+	let sameSite = null;
 	let hasSecure = false;
 	let hasPartitioned = false;
 
@@ -640,31 +640,24 @@ function scopeSetCookie(c, ns, workerIsHttps, fromScript = false) {
 		if (attr === 'partitioned') {
 			// CHIPS 同样要求 Secure；必须拒绝整条 Cookie，而非扩大作用域。
 			if (!workerIsHttps) return null;
-			if (!hasPartitioned) { out.push('Partitioned'); hasPartitioned = true; sameSiteNone = true; }
+			if (!hasPartitioned) { out.push('Partitioned'); hasPartitioned = true; }
 			continue;
 		}
 		if (attr === 'samesite') {
-			// SameSite 必须带值；遇到 `Set-Cookie: a=b; SameSite` 这种无值写法，
-			// 直接丢弃，否则会拼出 SameSite=SameSite 这种垃圾属性
-			const eqi = part.indexOf('=');
-			if (eqi < 0) continue;
-			const val = part.slice(eqi + 1).trim();
-			if (!val) continue;
-			const isNone = val.toLowerCase() === 'none';
-			sameSiteNone = sameSiteNone || isNone;
-			if (isNone && !workerIsHttps) return null;
-			out.push(`SameSite=${val}`);
+			// 同名属性以最后一个为准；未知或空值是浏览器的默认模式。
+			const value = split < 0 ? '' : part.slice(split + 1).trim();
+			sameSite = /^(?:lax|strict|none)$/i.test(value) ? value : null;
 			continue;
 		}
 		out.push(part);
 	}
 
-	if (prefix && !hasSecure) return null;
+	// 必须由上游或页面原本声明 Secure；补写会接受浏览器本应拒绝的 Cookie。
+	if (!hasSecure && (prefix || hasPartitioned || sameSite?.toLowerCase() === 'none')) return null;
 	if (/^__host-/i.test(prefix) && (hasDomain || path !== '/')) return null;
 	if (/http-$/i.test(prefix) && !hasHttpOnly) return null;
+	if (sameSite) out.push(`SameSite=${sameSite}`);
 	out.push('Path=/');
-	// SameSite=None / Partitioned 必须伴随 Secure，否则现代浏览器拒绝写入
-	if (sameSiteNone && workerIsHttps && !hasSecure) out.push('Secure');
 	return out.join('; ');
 }
 
