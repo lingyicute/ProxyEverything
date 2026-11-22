@@ -1253,7 +1253,9 @@ function rwPing(v){
   var t=v.trim();
   return t?t.split(/\\s+/).map(rp).join(' '):v;
 }
-function patchSetter(ctor,prop,ss){
+function rwAnchorArg(v){return typeof v==='string'||v instanceof URL?rwNavigation(String(v),true):v;}
+function rwFormArg(v){return typeof v==='string'||v instanceof URL?rwNavigation(String(v),false):v;}
+function patchSetter(ctor,prop,rewrite=rwUrlArg){
   try{
     if(!ctor||!ctor.prototype)return;
     var d=Object.getOwnPropertyDescriptor(ctor.prototype,prop);
@@ -1261,7 +1263,7 @@ function patchSetter(ctor,prop,ss){
     var orig=d.set;
     Object.defineProperty(ctor.prototype,prop,{
       configurable:true,enumerable:d.enumerable,get:d.get,
-      set:function(v){try{v=ss===1?rwSrcset(v):ss===2?rwPing(v):rwUrlArg(v);}catch(e){}return orig.call(this,v);}
+      set:function(v){try{v=rewrite(v);}catch(e){}return orig.call(this,v);}
     });
   }catch(e){}
 }
@@ -1270,22 +1272,22 @@ ${isSrcsetSpace.toString()}
 ${mapSrcset.toString()}
 function rwSrcset(v){return typeof v==='string'?mapSrcset(v,rp):v;}
 var I=window.HTMLImageElement;
-patchSetter(I,'src');patchSetter(I,'srcset',1);
+patchSetter(I,'src');patchSetter(I,'srcset',rwSrcset);
 patchSetter(window.HTMLScriptElement,'src');
 patchSetter(window.HTMLIFrameElement,'src');
 patchSetter(window.HTMLFrameElement,'src');
-patchSetter(window.HTMLLinkElement,'href');patchSetter(window.HTMLLinkElement,'imageSrcset',1);
-patchSetter(window.HTMLAnchorElement,'href');patchSetter(window.HTMLAnchorElement,'ping',2);
-patchSetter(window.HTMLAreaElement,'href');patchSetter(window.HTMLAreaElement,'ping',2);
-patchSetter(window.HTMLSourceElement,'src');patchSetter(window.HTMLSourceElement,'srcset',1);
+patchSetter(window.HTMLLinkElement,'href');patchSetter(window.HTMLLinkElement,'imageSrcset',rwSrcset);
+patchSetter(window.HTMLAnchorElement,'href',rwAnchorArg);patchSetter(window.HTMLAnchorElement,'ping',rwPing);
+patchSetter(window.HTMLAreaElement,'href',rwAnchorArg);patchSetter(window.HTMLAreaElement,'ping',rwPing);
+patchSetter(window.HTMLSourceElement,'src');patchSetter(window.HTMLSourceElement,'srcset',rwSrcset);
 patchSetter(window.HTMLMediaElement,'src');
 patchSetter(window.HTMLVideoElement,'poster');
-patchSetter(window.HTMLFormElement,'action');
+patchSetter(window.HTMLFormElement,'action',rwFormArg);
 patchSetter(window.HTMLObjectElement,'data');
 patchSetter(window.HTMLEmbedElement,'src');
 patchSetter(window.HTMLInputElement,'src');
-patchSetter(window.HTMLInputElement,'formAction');
-patchSetter(window.HTMLButtonElement,'formAction');
+patchSetter(window.HTMLInputElement,'formAction',rwFormArg);
+patchSetter(window.HTMLButtonElement,'formAction',rwFormArg);
 patchSetter(window.HTMLTrackElement,'src');
 [window.HTMLScriptElement,window.HTMLLinkElement].forEach(function(C){
   try{

@@ -245,3 +245,26 @@ test('shim: wrapped constructors keep subclass prototypes and native call semant
 	assert.equal(run(`new window.Audio('clip.mp3').src`), 'https://proxy.example/~https%3A%2F%2Fexample.com/dir/clip.mp3');
 	assert.ok(run(`new window.Audio() instanceof window.Audio`));
 });
+
+test('navigation property setters follow the same base and empty URL rules as attributes', () => {
+	class HTMLAnchorElement { set href(value) { this.value = String(value); } }
+	class HTMLAreaElement { set href(value) { this.value = String(value); } }
+	class HTMLFormElement { set action(value) { this.value = String(value); } }
+	class HTMLButtonElement { set formAction(value) { this.value = String(value); } }
+	const { ctx } = createBrowser({ HTMLAnchorElement, HTMLAreaElement, HTMLFormElement, HTMLButtonElement });
+	ctx.document.querySelectorAll = () => [{ getAttribute: () => 'https://example.com/other/' }];
+	for (const Link of [ctx.HTMLAnchorElement, ctx.HTMLAreaElement]) {
+		const link = new Link();
+		link.href = '';
+		assert.equal(link.value, proxy('/other/'));
+		link.href = '#section';
+		assert.equal(link.value, proxy('/other/#section'));
+	}
+	for (const [Control, prop] of [[ctx.HTMLFormElement, 'action'], [ctx.HTMLButtonElement, 'formAction']]) {
+		const control = new Control();
+		control[prop] = '';
+		assert.equal(control.value, '');
+		control[prop] = '#section';
+		assert.equal(control.value, proxy('/other/#section'));
+	}
+});
