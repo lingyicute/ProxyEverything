@@ -1366,6 +1366,25 @@ var oWo=window.open;
 if(oWo)window.open=function(u){try{if(arguments.length&&u!==undefined&&typeof u!=='symbol')arguments[0]=rwUrlArg(String(u));}catch(e){}return oWo.apply(this,arguments);};
 try{var oAs=location.assign.bind(location);location.assign=function(u){return oAs(u!==undefined&&typeof u!=='symbol'?rpBase(String(u)):u);};}catch(e){}
 try{var oRe=location.replace.bind(location);location.replace=function(u){return oRe(u!==undefined&&typeof u!=='symbol'?rpBase(String(u)):u);};}catch(e){}
+/* Location 的 href/assign/replace 不可配置，上面两行在真实浏览器中不会生效。支持 Navigation API 时在此兜底：
+   把脚本或漏改链接发起的、会离开代理或落到未改写路径的跨文档导航改道；POST 表单与下载保持原样。 */
+try{
+  if(window.navigation&&navigation.addEventListener)navigation.addEventListener('navigate',function(ev){
+    try{
+      if(!ev.cancelable||ev.hashChange||ev.formData||ev.downloadRequest!=null)return;
+      if(ev.navigationType!=='push'&&ev.navigationType!=='replace')return;
+      if(ev.destination.sameDocument)return;
+      var dest=new URL(ev.destination.url);
+      if(dest.protocol!=='http:'&&dest.protocol!=='https:')return;
+      if(isSelfHost(dest)&&isProxiedPath(dest.pathname))return;
+      var next=rp(dest.href);
+      if(!isProxyRequestUrl(next))return;
+      ev.preventDefault();
+      var replace=ev.navigationType==='replace';
+      setTimeout(function(){if(replace)location.replace(next);else location.assign(next);},0);
+    }catch(e){}
+  });
+}catch(e){}
 /* ---- DOM 属性 setter 拦截：img.src = "..." 等动态赋值 ---- */
 ${mapPingUrls.toString()}
 function rwPing(v){return v!=null&&typeof v!=='symbol'?mapPingUrls(String(v),rp):v;}

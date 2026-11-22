@@ -70,6 +70,50 @@ test('shim: every spelling of a proxy-host URL is rebound to the target like on 
 	assert.equal(rp('app://proxy.example/open'), 'app://proxy.example/open');
 });
 
+test('shim: Navigation API reroutes script-initiated navigations that would leave the proxy', () => {
+	let listener = null;
+	const navigated = [];
+	const { ctx } = createBrowser({
+		location: {
+			href: proxy('/dir/page'), origin, protocol: 'https:', hostname: 'proxy.example', port: '',
+			pathname: '/~' + encodeURIComponent('https://example.com') + '/dir/page', search: '',
+			assign(url) { navigated.push(['assign', url]); },
+			replace(url) { navigated.push(['replace', url]); },
+		},
+		navigation: { addEventListener(type, fn) { if (type === 'navigate') listener = fn; } },
+		setTimeout: fn => fn(),
+	});
+	assert.equal(typeof ctx.navigation.addEventListener, 'function');
+	const fire = (url, extra = {}) => {
+		const ev = {
+			cancelable: true, hashChange: false, formData: null, downloadRequest: null, navigationType: 'push',
+			destination: { url, sameDocument: false }, prevented: false, preventDefault() { this.prevented = true; }, ...extra,
+		};
+		listener(ev);
+		return ev.prevented;
+	};
+	assert.equal(fire('https://example.com/next?x=1#h'), true);
+	assert.equal(fire('https://other.example/p', { navigationType: 'replace' }), true);
+	assert.equal(fire(origin + '/leaked/path'), true);
+	assert.deepEqual(navigated, [
+		['assign', proxy('/next?x=1#h')],
+		['replace', origin + '/~' + encodeURIComponent('https://other.example') + '/p'],
+		['assign', proxy('/leaked/path')],
+	]);
+	// 已代理的导航、同文档导航、POST 表单、下载、历史遍历、非 HTTP(S) 目标和不可取消的事件都不干预。
+	for (const [url, extra] of [
+		[proxy('/already'), {}],
+		['https://example.com/a', { cancelable: false }],
+		['https://example.com/a', { formData: {} }],
+		['https://example.com/a', { downloadRequest: '' }],
+		['https://example.com/a', { navigationType: 'traverse' }],
+		['https://example.com/a', { destination: { url: 'https://example.com/a', sameDocument: true } }],
+		['https://example.com/a#x', { hashChange: true }],
+		['mailto:a@b.c', {}],
+	]) assert.equal(fire(url, extra), false, url + JSON.stringify(extra));
+	assert.equal(navigated.length, 3);
+});
+
 test('shim: data/action/formaction are only rewritten on elements that load them', () => {
 	const { ctx } = createBrowser();
 	const el = tag => new ctx.Element(tag);
