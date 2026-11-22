@@ -258,6 +258,24 @@ test('created resources expose a usable proxy Location without discarding their 
 	assert.equal(await r.text(), 'created');
 });
 
+test('redirects to external protocol handlers keep their Location', async t => {
+	let location;
+	t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 302, headers: { location } }));
+	for (const [next, expected] of [
+		['mailto:team@example.com?subject=hi', 'mailto:team@example.com?subject=hi'],
+		['zoommtg://zoom.us/join?confno=1', 'zoommtg://zoom.us/join?confno=1'],
+		['/next', proxy('https://example.com/next')],
+		['https://[', null],
+	]) {
+		location = next;
+		const r = await worker.fetch(new Request(proxy('https://example.com/start')), {
+			ALLOWED_TARGET_ORIGINS: 'https://example.com',
+		});
+		assert.equal(r.status, 302);
+		assert.equal(r.headers.get('Location'), expected);
+	}
+});
+
 test('redirect status without a Location keeps the explanatory representation', async t => {
 	t.mock.method(globalThis, 'fetch', () => new Response('Choose a new address.', { status: 302 }));
 	const r = await worker.fetch(new Request(proxy('https://example.com/old')), { ALLOWED_TARGET_ORIGINS: 'https://example.com' });
