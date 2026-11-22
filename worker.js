@@ -65,6 +65,26 @@ const REPRESENTATION_HEADERS = [
 	'content-range', 'accept-ranges',
 ];
 const MAX_TRANSFORM_BYTES = 2 * 1024 * 1024;
+const MAX_REWRITE_GROWTH = 2 * MAX_TRANSFORM_BYTES;
+const REWRITE_LIMIT = Symbol('rewrite-limit');
+
+/** 多个短引用可能继承同一条很长的基路径。限制每次改写的累计增长，超限时交回完整原文。 */
+function capRewriteGrowth(transform) {
+	return (source, ...args) => {
+		let remaining = MAX_REWRITE_GROWTH;
+		const account = (beforeLength, after) => {
+			remaining -= Math.max(0, after.length - beforeLength);
+			if (remaining < 0) throw REWRITE_LIMIT;
+			return after;
+		};
+		try { return transform(account, source, ...args); }
+		catch (error) {
+			if (error === REWRITE_LIMIT) return source;
+			throw error;
+		}
+	};
+}
+
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 
 // 禁止 Connection 头夹带并借机剥除端到端关键语义头（RFC 9110 §7.6.1）
@@ -316,9 +336,9 @@ function mapSrcset(s, rewrite) {
 	return out;
 }
 
-function rewriteSrcset(value, baseUrl, workerOrigin) {
-	return mapSrcset(String(value), url => rewriteUrl(url, baseUrl, workerOrigin));
-}
+const rewriteSrcset = capRewriteGrowth((account, value, baseUrl, workerOrigin) => {
+	return mapSrcset(String(value), url => account(url.length, rewriteUrl(url, baseUrl, workerOrigin)));
+});
 
 /** CSS 字符串不能直接沿用源引号：解析相对地址后可能从基地址继承 ' 或括号，并转义 <、> 防逸出。 */
 function quoteCssString(value) {
@@ -438,7 +458,7 @@ function cssName(source, start, end) {
  * 线性扫描 CSS URL token 与 @import 字符串，不匹配注释/普通字符串。
  * 这不是完整 CSS AST：仅改写 URL 载荷，其余源码（包括 media/layer 条件）保持原样。
  */
-function rewriteCss(css, baseUrl, workerOrigin) {
+const rewriteCss = capRewriteGrowth((account, css, baseUrl, workerOrigin) => {
 	const source = String(css);
 	if (!source.includes('(') && !source.includes('@')) return source;
 	const parts = [];
@@ -452,7 +472,7 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 		const rewritten = rewriteUrl(value, baseUrl, workerOrigin);
 		if (rewritten === value) return;
 		const quoted = quoteCssString(rewritten);
-		parts.push(source.slice(cursor, start), wrapUrl ? `url(${quoted})` : quoted);
+		parts.push(source.slice(cursor, start), account(end - start, wrapUrl ? `url(${quoted})` : quoted));
 		cursor = end;
 	};
 	while (i < source.length) {
@@ -532,7 +552,7 @@ function rewriteCss(css, baseUrl, workerOrigin) {
 	if (!cursor) return source;
 	parts.push(source.slice(cursor));
 	return parts.join('');
-}
+});
 
 /** 重写内联 style / CSS 字符串中的 url() */
 function rewriteStyleAttr(style, baseUrl, workerOrigin) {
@@ -2354,7 +2374,7 @@ function rewriteModuleSpecifier(specifier, baseUrl, workerOrigin) {
  * 无法静态确定的动态 import、裸说明符和 import.meta 保持原样。
  * 解析失败时原样返回，避免对新语法/无效源码进行部分改写。
  */
-function rewriteJsModuleSpecifiers(js, baseUrl, workerOrigin) {
+const rewriteJsModuleSpecifiers = capRewriteGrowth((account, js, baseUrl, workerOrigin) => {
 	const source = String(js);
 	if (!source.includes('import') && !source.includes('export')) return source;
 	let imports;
@@ -2369,13 +2389,13 @@ function rewriteJsModuleSpecifiers(js, baseUrl, workerOrigin) {
 		// 静态说明符 s/e 不含引号；动态说明符 s/e 包含整个字面量。
 		const start = item.d === -1 ? item.s - 1 : item.s;
 		const end = item.d === -1 ? item.e + 1 : item.e;
-		parts.push(source.slice(cursor, start), stringifyInlineJson(rewritten));
+		parts.push(source.slice(cursor, start), account(end - start, stringifyInlineJson(rewritten)));
 		cursor = end;
 	}
 	if (!parts.length) return source;
 	parts.push(source.slice(cursor));
 	return parts.join('');
-}
+});
 
 /** script raw-text 不解析 HTML 实体；用 JSON 转义防止 < 或 ]]> 破坏 HTML/CDATA 边界。 */
 function stringifyInlineJson(value) {
