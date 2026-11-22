@@ -1403,6 +1403,7 @@ function bufferedTextHandler(rewrite, matches = () => true) {
 function transformHtml(response, baseUrl, workerOrigin, ck) {
 	const rewriter = new HTMLRewriter();
 	let baseHref = baseUrl;
+	let sawBaseHref = false;
 	let hasBaseHref = false;
 	let templateDepth = 0;
 	const htmlNamespace = 'http://www.w3.org/1999/xhtml';
@@ -1431,28 +1432,31 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 		},
 	});
 
-	// 只采纳活动文档内第一个合法 HTTP(S) href，保留 target 与原始基地址供 shim 使用。
+	// HTML 规范以活动文档内第一个带 href 的 base 冻结基地址；无效或非 HTTP(S) 回退文档原地址，不顺延后续 base。
 	rewriter.on('base', {
 		element(el) {
 			if (templateDepth || el.namespaceURI !== htmlNamespace) return;
-			const h = el.getAttribute('href');
-			if (h != null && !hasBaseHref) {
-				try {
-					const u = new URL(h, baseUrl);
-					if (u.protocol === 'http:' || u.protocol === 'https:') {
-						hasBaseHref = true;
-						baseHref = u.href;
-						el.setAttribute('data-pe-base', baseHref);
-					} else {
-						el.removeAttribute('data-pe-base');
-					}
-				} catch {
-					el.removeAttribute('data-pe-base');
+			if (el.hasAttribute('href')) {
+				const h = el.getAttribute('href');
+				let nextBase = '';
+				if (h != null) {
+					try {
+						const u = new URL(h, baseUrl);
+						if (u.protocol === 'http:' || u.protocol === 'https:') nextBase = u.href;
+					} catch {}
 				}
+				if (!sawBaseHref) {
+					sawBaseHref = true;
+					if (nextBase) {
+						hasBaseHref = true;
+						baseHref = nextBase;
+					}
+				}
+				el.setAttribute('data-pe-base', nextBase);
+				el.removeAttribute('href');
 			} else {
 				el.removeAttribute('data-pe-base');
 			}
-			el.removeAttribute('href');
 		},
 	});
 

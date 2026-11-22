@@ -107,3 +107,16 @@ test('HTML base ignores inert template contents and foreign namespaces', () => {
 	handlers.img[0].element(secondImg);
 	assert.equal(secondImg.getAttribute('src'), proxy('/assets/second.png'));
 });
+
+test('HTML base freezes at the first base element with href even when disallowed', () => {
+	const handlers = collectHandlers();
+	const first = element('base', { href: 'javascript:void(0)' });
+	const second = element('base', { href: 'https://other.example/sub/' });
+	handlers.base[0].element(first);
+	handlers.base[0].element(second);
+	assert.equal(first.getAttribute('data-pe-base'), '');
+	assert.equal(second.getAttribute('data-pe-base'), 'https://other.example/sub/');
+	const link = element('a', { href: 'rel.html' });
+	handlers.a[0].element(link);
+	assert.equal(link.getAttribute('href'), proxy('/dir/rel.html'));
+});
