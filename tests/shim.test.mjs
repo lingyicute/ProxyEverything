@@ -275,3 +275,17 @@ test('DOM ping lists retain Unicode URL characters and ASCII separators', () => 
 	a.setAttribute('ping', ' /a\u00a0b\t/next ');
 	assert.equal(a.getAttribute('ping'), ` ${proxy('/a%C2%A0b')}\t${proxy('/next')} `);
 });
+
+test('history state updates resolve empty URLs against base and block dot-segment escapes', () => {
+	const calls = [];
+	const save = (...args) => calls.push(args[2]);
+	const { ctx } = createBrowser({ DOMException, history: { pushState: save, replaceState: save } });
+	ctx.document.querySelectorAll = () => [{ getAttribute: name => name === 'data-pe-base' ? 'https://example.com/sub/index.html' : null }];
+	ctx.history.pushState(null, '', '');
+	assert.equal(calls[0], proxy('/sub/index.html'));
+	ctx.history.replaceState(null, '', '/~https%3A%2F%2Fexample.com./sub/next');
+	assert.equal(calls[1], '/~https%3A%2F%2Fexample.com./sub/next');
+	ctx.history.pushState(null, '', '/~https%3A%2F%2Fexample.com/../other.example/inside');
+	assert.equal(calls[2], '/~https%3A%2F%2Fexample.com/other.example/inside');
+	assert.throws(() => ctx.history.pushState(null, '', '/~https%3A%2F%2Fother.example/x'), { name: 'SecurityError' });
+});

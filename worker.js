@@ -1299,12 +1299,14 @@ var WS=wrapCtor('WebSocket',rwWsUrl);
 if(WS)['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k,i){try{WS[k]=i;}catch(e){}});
 /* ---- history / window.open / location.assign ---- */
 function wrapHistory(fn){return function(st,t,u){
-  if(u!=null&&u!==''){
+  if(u!=null){
     var next=rwNavigation(String(u),true);
     var link=new URL(next,location.href);
-    if(isSelfHost(link)&&isProxiedPath(link.pathname)){
-      var dest=new URL(decodeProxyPath(link.pathname));
-      if(dest.origin!==new URL(currentTarget()).origin)throw new DOMException('History URL has a different target origin','SecurityError');
+    if(isSelfHost(link)){
+      var dec=isProxiedPath(link.pathname)?decodeProxyPath(link.pathname):'';
+      var dest=null;
+      if(dec){try{dest=new URL(dec);var dh=dest.hostname.toLowerCase().replace(/\\.+$/,'');if(dh)dest.hostname=dh;}catch(e){dest=null;}}
+      if(!dest||dest.origin!==new URL(currentTarget()).origin)throw new DOMException('History URL has a different target origin','SecurityError');
     }
     arguments[2]=next;
   }
