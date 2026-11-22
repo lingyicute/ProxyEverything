@@ -22,7 +22,7 @@ export default {
     if (url.pathname === '/style.css') {
       return new Response('a{background:url(pic.png)}', { headers: { 'Content-Type': 'text/css', 'Content-Encoding': 'gzip' } });
     }
-    if (url.pathname === '/socket') {
+    if (url.pathname === '/socket' || url.pathname === '/' || url.pathname === '/robots.txt') {
       const pair = new WebSocketPair();
       pair[0].accept();
       pair[0].binaryType = 'arraybuffer';
@@ -78,20 +78,24 @@ test('real Workerd: HTML, compressed HTTP, URL encoding and WebSocket', {
 	const path = await runtime.dispatchFetch(proxy + '/asset/a%2Fb?x=1');
 	assert.equal(await path.text(), '/asset/a%2Fb?x=1');
 
-	const upgrade = await runtime.dispatchFetch(proxy + '/socket', {
-		headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': 'fixture' },
-	});
-	assert.equal(upgrade.status, 101);
-	assert.equal(upgrade.headers.get('Sec-WebSocket-Protocol'), 'fixture');
-	const socket = upgrade.webSocket;
-	socket.accept();
-	const result = new Promise((resolve, reject) => {
-		const messages = [];
-		socket.addEventListener('message', event => messages.push(Buffer.from(event.data)));
-		socket.addEventListener('error', reject);
-		socket.addEventListener('close', event => resolve({ messages, code: event.code, reason: event.reason }));
-	});
-	const payload = new Uint8Array([0, 1, 255]);
-	socket.send(payload.buffer);
-	assert.deepEqual(await result, { messages: [Buffer.from(payload)], code: 4000, reason: 'fixture finished' });
+	for (const url of [proxy + '/socket', 'https://proxy.example/', 'https://proxy.example/robots.txt']) {
+		const upgrade = await runtime.dispatchFetch(url, {
+			headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': 'fixture', Referer: proxy + '/html' },
+		});
+		assert.equal(upgrade.status, 101);
+		assert.equal(upgrade.headers.get('Sec-WebSocket-Protocol'), 'fixture');
+		const socket = upgrade.webSocket;
+		socket.accept();
+		const result = new Promise((resolve, reject) => {
+			const messages = [];
+			socket.addEventListener('message', event => messages.push(Buffer.from(event.data)));
+			socket.addEventListener('error', reject);
+			socket.addEventListener('close', event => resolve({ messages, code: event.code, reason: event.reason }));
+		});
+		const payload = new Uint8Array([0, 1, 255]);
+		socket.send(payload.buffer);
+		assert.deepEqual(await result, { messages: [Buffer.from(payload)], code: 4000, reason: 'fixture finished' });
+	}
+	assert.match(await (await runtime.dispatchFetch('https://proxy.example/')).text(), /Proxy Everything/);
+	assert.match(await (await runtime.dispatchFetch('https://proxy.example/robots.txt')).text(), /Disallow: \//);
 });
