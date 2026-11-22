@@ -421,3 +421,23 @@ test('leaked relative WebSocket handshakes are forwarded instead of redirected',
 	}), { ALLOWED_TARGET_ORIGINS: 'https://example.com' });
 	assert.equal(plain.status, 307);
 });
+
+test('XML charset detection does not depend on the upstream chunk boundaries', async () => {
+	for (const charset of ['windows-1252', 'utf-16le', 'utf-16be']) {
+		const declaration = `<?xml version="1.0" encoding="${charset}"?>`;
+		const input = declaration + '<html>Café</html>';
+		const bytes = Buffer.from(input, charset === 'windows-1252' ? 'latin1' : 'utf16le');
+		if (charset === 'utf-16be') bytes.swap16();
+		const size = charset === 'windows-1252' ? declaration.length : 4;
+		for (let split = 1; split <= size; split++) {
+			const stream = new ReadableStream({ start(controller) {
+				controller.enqueue(bytes.subarray(0, split));
+				controller.enqueue(bytes.subarray(split));
+				controller.close();
+			} });
+			const result = await sniffHtmlCharset(stream, null, true);
+			assert.equal(result.charset, charset, `split after byte ${split}`);
+			assert.deepEqual(Buffer.from(await new Response(result.body).arrayBuffer()), bytes);
+		}
+	}
+});

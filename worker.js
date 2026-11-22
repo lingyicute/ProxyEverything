@@ -899,17 +899,22 @@ async function sniffHtmlCharset(body, declaredCharset = null, isXml = false) {
 			if (total < 3) continue;
 			if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) { charset = 'utf-8'; break; }
 			if (declaredCharset) break;
-			if (isXml && total >= 4) {
-				charset = utf16XmlSignature(head);
-				if (charset) break;
+			if (isXml) {
+				// 3 字节的前缀仍可能是无 BOM 的 UTF-16 声明。
+				if (total === 3 && ((head[0] === 0x3c && head[1] === 0 && head[2] === 0x3f) ||
+					(head[0] === 0 && head[1] === 0x3c && head[2] === 0))) continue;
+				if (total >= 4) {
+					charset = utf16XmlSignature(head);
+					if (charset) break;
+				}
 			}
 			const prefixText = new TextDecoder().decode(head.subarray(0, total));
 			charset = isXml ? xmlDeclaredCharset(prefixText) : prescanHtmlCharset(prefixText);
 			if (charset) break;
-			// XML 声明只能位于开头：已完整读完或不可能再出现时，结论不会因更多字节改变。
-			if (isXml && (prefixText.length < 6
-				? !'<?xml'.startsWith(prefixText.slice(0, 5))
-				: !/^<\?xml[ \t\r\n][^?]*$/.test(prefixText))) break;
+			// XML 声明只能位于开头；末尾的 '?' 可能是跨分片的 '?>' 的第一部分。
+			if (isXml && (prefixText.length <= 5
+				? !'<?xml'.startsWith(prefixText)
+				: !/^<\?xml[ \t\r\n][^?]*\??$/.test(prefixText))) break;
 		}
 	} finally {
 		// 不 await：tee 另一支消费完之前 cancel 可能不 resolve。
