@@ -157,6 +157,14 @@ function safeDecode(s) {
 	}
 }
 
+// WHATWG URL 只忽略边缘的 C0 控制字符和 ASCII 空格；其它空白可能是路径的一部分。
+function trimUrlSpace(value) {
+	let start = 0, end = value.length;
+	while (start < end && value.charCodeAt(start) <= 0x20) start++;
+	while (end > start && value.charCodeAt(end - 1) <= 0x20) end--;
+	return value.slice(start, end);
+}
+
 function urlSuffix(u) {
 	// URL.search / .hash 会吞掉空的 ? / #；直接从已序列化的地址保留这些分隔符。
 	const href = u.href;
@@ -191,7 +199,7 @@ function decodeProxyPath(pathname) {
 
 // 这些纯函数也供无依赖的浏览器脚本使用，避免引入不同的编解码规则。
 function browserPathHelpers() {
-	return [safeDecode, urlSuffix, encodeProxyPath, isProxiedPath, decodeProxyPath].map(fn => fn.toString()).join('\n');
+	return [safeDecode, trimUrlSpace, urlSuffix, encodeProxyPath, isProxiedPath, decodeProxyPath].map(fn => fn.toString()).join('\n');
 }
 
 /** 判断 URL 是否指向代理 Worker 自身主机与端口（忽略协议差异与尾点） */
@@ -209,7 +217,7 @@ function isWorkerHost(u, workerOrigin) {
 
 function rewriteUrl(value, baseUrl, workerOrigin) {
 	if (value == null) return value;
-	let v = String(value).trim();
+	const v = trimUrlSpace(String(value));
 	if (!v) return v;
 	// 页内锚点（#foo、url(#gradient)）保持原样
 	if (v.startsWith('#')) return v;
@@ -1055,7 +1063,7 @@ function isSelfHost(u){
   return (h===WOH&&p===WOP)||(Boolean(lh)&&h===lh&&p===(location.port||''));
 }
 function currentTarget(){
-var DEC=decodeProxyPath(location.pathname).trim().replace(/^\\/+/,'');
+var DEC=trimUrlSpace(decodeProxyPath(location.pathname)).replace(/^\\/+/,'');
 if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(DEC))DEC='https://'+DEC;
 var hIdx=DEC.indexOf('#');if(hIdx>=0)DEC=DEC.substring(0,hIdx);
 var search=urlSuffix(new URL(location.href)).split('#',1)[0];
@@ -1081,7 +1089,7 @@ function rp(v){
     if(v instanceof URL)return rp(v.href);
     return v;
   }
-  var s=String(v).trim();
+  var s=trimUrlSpace(String(v));
   if(!s||SKIP_RE.test(s))return s;
   if(isProxiedPath(s))return s;
   var forcedWs='';
@@ -1118,7 +1126,7 @@ function rwUrlArg(a){
   return a;
 }
 function rpBase(a){
-  if(typeof a==='string'&&!a.trim())return rp(base());
+  if(typeof a==='string'&&!trimUrlSpace(a))return rp(base());
   return rwUrlArg(a);
 }
 function isProxyRequestUrl(value){
@@ -1206,7 +1214,7 @@ function wrapCtor(name,rewrite){
   return W;
 }
 wrapCtor('EventSource',rpBase);
-if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{u=typeof u==='string'&&!u.trim()?rp(base()):rp(u);}catch(e){}return arguments.length>1?oSB(u,d):oSB(u);};}
+if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{u=typeof u==='string'&&!trimUrlSpace(u)?rp(base()):rp(u);}catch(e){}return arguments.length>1?oSB(u,d):oSB(u);};}
 wrapCtor('Worker',rpBase);
 try{wrapCtor('SharedWorker',rpBase);}catch(e){}
 try{wrapCtor('Audio',rp);}catch(e){}
@@ -1245,8 +1253,8 @@ if(history.pushState)history.pushState=wrapHistory(history.pushState);
 if(history.replaceState)history.replaceState=wrapHistory(history.replaceState);
 var oWo=window.open;
 if(oWo)window.open=function(u){try{if(arguments.length&&u!=null)arguments[0]=rwUrlArg(u);}catch(e){}return oWo.apply(this,arguments);};
-try{var oAs=location.assign.bind(location);location.assign=function(u){return oAs(typeof u==='string'&&!u.trim()?rp(base()):rp(u));};}catch(e){}
-try{var oRe=location.replace.bind(location);location.replace=function(u){return oRe(typeof u==='string'&&!u.trim()?rp(base()):rp(u));};}catch(e){}
+try{var oAs=location.assign.bind(location);location.assign=function(u){return oAs(typeof u==='string'&&!trimUrlSpace(u)?rp(base()):rp(u));};}catch(e){}
+try{var oRe=location.replace.bind(location);location.replace=function(u){return oRe(typeof u==='string'&&!trimUrlSpace(u)?rp(base()):rp(u));};}catch(e){}
 /* ---- DOM 属性 setter 拦截：img.src = "..." 等动态赋值 ---- */
 function rwPing(v){
   if(typeof v!=='string')return v;
@@ -1333,7 +1341,7 @@ function normTag(el){
   return idx>=0?raw.slice(idx+1):raw;
 }
 function rwNavigation(sv,emptyUsesBase){
-  var trimmed=sv.trim();
+  var trimmed=trimUrlSpace(sv);
   if(!trimmed)return emptyUsesBase?rp(base()):sv;
   if(trimmed.charAt(0)==='#'){
     var b=base();
@@ -1493,10 +1501,10 @@ function rwForm(f,sub){
   try{
     if(!f||normTag(f)!=='FORM')return;
     var a=f.getAttribute('action');
-    if(a&&a.trim()){var p=rwNavigation(a,false);if(p!==a)f.setAttribute('action',p);}
+    if(a&&trimUrlSpace(a)){var p=rwNavigation(a,false);if(p!==a)f.setAttribute('action',p);}
     if(sub&&sub.getAttribute){
       var fa=sub.getAttribute('formaction');
-      if(fa&&fa.trim()){
+      if(fa&&trimUrlSpace(fa)){
         var pfa=rwNavigation(fa,false);
         if(pfa!==fa)sub.setAttribute('formaction',pfa);
       }
@@ -2108,7 +2116,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 						if (!trimmed) continue;
 						next = trimmed.split(/\s+/).map(rw).join(' ');
 					} else {
-						const trimmed = v.trim();
+						const trimmed = trimUrlSpace(v);
 						const isFormAction = attr === 'action' || attr === 'formaction';
 						const isAnchor = (tag === 'a' || tag === 'area') && (attr === 'href' || attr === 'xlink:href');
 						// 缺省或空的 form action 始终使用文档地址，不使用 <base>。
@@ -2659,7 +2667,7 @@ function parseTarget(url) {
 	if (url.pathname === '/' || url.pathname === '') return null;
 	const raw = decodeProxyPath(url.pathname);
 	if (!raw) return null;
-	const trimmed = raw.trim().replace(/^\/+/, '');
+	const trimmed = trimUrlSpace(raw).replace(/^\/+/, '');
 	if (!trimmed) return null;
 	// 拒绝无双斜杠的非 HTTP(S)/WS(S) scheme（如 mailto:user@host 被拼上 https:// 后误解析为认证凭据）
 	if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) &&
@@ -2909,7 +2917,7 @@ Disallow: /
 
 		// ---- 漏网的站内相对请求：innerHTML、location.href = '/x'、Worker 内请求、默认 /favicon.ico 等未经改写的地址
 		//      会直接落到代理域。路径不带协议而 Referer 是代理页面时，按来源页的目标站点还原并重定向 ----
-		const usesRefererRoute = !isProxiedPath(url.pathname) && !/^(?:https?|wss?):\/\//i.test(decodeProxyPath(url.pathname).trim().replace(/^\/+/, ''));
+		const usesRefererRoute = !isProxiedPath(url.pathname) && !/^(?:https?|wss?):\/\//i.test(trimUrlSpace(decodeProxyPath(url.pathname)).replace(/^\/+/, ''));
 		let refererRouted = null;
 		if (usesRefererRoute) {
 			const refTarget = refererTarget(request, workerOrigin, env);

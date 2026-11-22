@@ -88,6 +88,12 @@ test('browser shim generates the same proxy paths as the server', () => {
 		XMLHttpRequest: { prototype: { open() {} } },
 	});
 
+	const nonAscii = '\u00a0image.png\u2003';
+	const canonical = proxy + '/~https%3A%2F%2Fsite.example/app/%C2%A0image.png%E2%80%83';
+	assert.equal(window.__PE__.rp(nonAscii), canonical);
+	assert.equal(rewriteUrl(nonAscii, base, proxy), canonical);
+	assert.equal(window.__PE__.rp('\u0001 /image.png\u001f'), proxy + '/~https%3A%2F%2Fsite.example/image.png');
+
 	for (const path of ['./admin/main.js', './a%2Fb/file%20name.js', '/assets/logo.svg',
 		proxy + '//assets.example/file?keep=1']) {
 		assert.equal(window.__PE__.rp(path), rewriteUrl(path, base, proxy));
