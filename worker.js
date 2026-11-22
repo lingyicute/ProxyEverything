@@ -328,11 +328,16 @@ function readCssString(css, start) {
 	let i = start + 1;
 	while (i < css.length) {
 		if (css[i] === quote) return { end: i + 1, value: decodeCssEscapes(css.slice(start + 1, i)) };
-		if (/[\n\r\f]/.test(css[i])) break; // bad-string-token
+		if (/[\n\r\f]/.test(css[i])) return { end: i, value: null }; // bad-string-token
 		if (css[i] === '\\') i = cssEscapeEnd(css, i);
 		else i++;
 	}
-	return { end: i, value: null };
+	// EOF 也结束字符串 token（CSS Syntax §4.3.5）；末尾落单的反斜杠不计入内容。
+	let end = css.length;
+	let slashes = 0;
+	while (end - slashes - 1 > start && css[end - slashes - 1] === '\\') slashes++;
+	if (slashes % 2) end--;
+	return { end: css.length, value: decodeCssEscapes(css.slice(start + 1, end)) };
 }
 
 function skipCssSpace(css, start, comments = false) {
@@ -355,7 +360,8 @@ function readCssUrl(css, start) {
 	if (css[i] === '"' || css[i] === "'") {
 		const str = readCssString(css, i);
 		i = skipCssSpace(css, str.end, true);
-		if (str.value !== null && css[i] === ')') return { end: i + 1, value: str.value };
+		// EOF 同样闭合函数块：浏览器照常加载 url("a.png 与 url("a.png" 中的地址。
+		if (str.value !== null && (i >= css.length || css[i] === ')')) return { end: Math.min(i + 1, css.length), value: str.value };
 		let depth = 1;
 		while (i < css.length && depth > 0) {
 			if (css[i] === '"' || css[i] === "'") { i = readCssString(css, i).end; continue; }
@@ -368,11 +374,12 @@ function readCssUrl(css, start) {
 	} else {
 		i = skipCssSpace(css, start);
 		const valueStart = i;
-		while (i < css.length) {
-			if (css[i] === ')') return { end: i + 1, value: decodeCssEscapes(css.slice(valueStart, i)) };
+		for (;;) {
+			// EOF 也结束 url token（CSS Syntax §4.3.6）。
+			if (i >= css.length || css[i] === ')') return { end: Math.min(i + 1, css.length), value: decodeCssEscapes(css.slice(valueStart, i)) };
 			if (isSrcsetSpace(css[i])) {
 				const end = skipCssSpace(css, i);
-				if (css[end] === ')') return { end: end + 1, value: decodeCssEscapes(css.slice(valueStart, i)) };
+				if (end >= css.length || css[end] === ')') return { end: Math.min(end + 1, css.length), value: decodeCssEscapes(css.slice(valueStart, i)) };
 				i = end;
 				break;
 			}

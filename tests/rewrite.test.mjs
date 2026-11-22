@@ -47,6 +47,19 @@ test('css: url() inside @namespace is opaque, including ; and /* in unquoted URL
 		input + `\n.a{background:url(\"${proxy('b.png')}\")}`);
 });
 
+test('css: url() and strings ended by EOF are still valid tokens', () => {
+	const out = `a{background:url("${proxy('a.png')}")`;
+	for (const input of ['url(a.png', 'url(a.png  ', 'url("a.png"', 'url("a.png', "url( 'a.png' /* c", 'url(a\\.png', 'url("a.png\\']) {
+		assert.equal(rewriteCss('a{background:' + input, base, origin), out, input);
+	}
+	assert.equal(rewriteCss('@import "a.css', base, origin), `@import "${proxy('a.css')}"`);
+	assert.equal(rewriteCss('a{background:image-set("a.png', base, origin), `a{background:image-set("${proxy('a.png')}"`);
+	// A newline ends a bad-string, and stray tokens after whitespace make a bad-url: both stay literal.
+	for (const input of ['a{background:url("a.png\n)}', 'a{background:url(a.png b', "@import 'a.css\n;", 'a{background:url(a.png\\']) {
+		assert.equal(rewriteCss(input, base, origin), input);
+	}
+});
+
 test('shim: script is valid both as HTML raw text and as XHTML CDATA content', () => {
 	const shim = getShimScript(origin, '__pe_x_');
 	assert.ok(shim.startsWith('<script>//<![CDATA[\n'));
