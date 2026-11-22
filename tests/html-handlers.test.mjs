@@ -32,6 +32,7 @@ function element(tag, attrs) {
 	const writes = [];
 	return {
 		tagName: tag,
+		namespaceURI: 'http://www.w3.org/1999/xhtml',
 		writes,
 		get attributes() { return map.entries(); },
 		getAttribute: name => (map.has(name) ? map.get(name) : null),
@@ -78,4 +79,31 @@ test('HTML base affects anchor fragments, but not absent or empty form actions',
 		for (const h of handlers[tag]) h.element(el);
 		assert.equal(el.getAttribute(key), expected);
 	}
+});
+
+test('HTML base ignores inert template contents and foreign namespaces', () => {
+	const handlers = collectHandlers();
+	let endOuter = null;
+	let endInner = null;
+	const outerTpl = Object.assign(element('template', {}), { onEndTag(fn) { endOuter = fn; } });
+	const innerTpl = Object.assign(element('template', {}), { onEndTag(fn) { endInner = fn; } });
+	handlers.template[0].element(outerTpl);
+	handlers.template[0].element(innerTpl);
+	handlers.base[0].element(element('base', { href: '/nested/' }));
+	endInner();
+	handlers.base[0].element(element('base', { href: '/inert/' }));
+	endOuter();
+
+	const svgBase = Object.assign(element('base', { href: '/foreign/' }), { namespaceURI: 'http://www.w3.org/2000/svg' });
+	handlers.base[0].element(svgBase);
+	assert.equal(svgBase.getAttribute('href'), '/foreign/');
+
+	const firstImg = element('img', { src: 'first.png' });
+	handlers.img[0].element(firstImg);
+	assert.equal(firstImg.getAttribute('src'), proxy('/dir/first.png'));
+
+	handlers.base[0].element(element('base', { href: '/assets/' }));
+	const secondImg = element('img', { src: 'second.png' });
+	handlers.img[0].element(secondImg);
+	assert.equal(secondImg.getAttribute('src'), proxy('/assets/second.png'));
 });
