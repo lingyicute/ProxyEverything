@@ -2311,7 +2311,7 @@ const CSS_CHARSET_SIGNATURE = /^@charset "([\x00-\x21\x23-\x7f]{0,1012})";/;
  * 超过 2 MiB 上限时把已读分片与剩余流无缝拼接，原样透传正文及其表示元数据。
  */
 function sniffTextCharset(bytes, kind, declaredCharset = null) {
-	const head = bytes.subarray(0, kind === 'css' ? 1024 : 256);
+	const head = bytes.subarray(0, kind === 'css' ? 1024 : kind === 'svg' ? 4096 : 256);
 	if (head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
 	if (head[0] === 0xfe && head[1] === 0xff) return 'utf-16be';
 	if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) return 'utf-8';

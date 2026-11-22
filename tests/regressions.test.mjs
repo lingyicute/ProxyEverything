@@ -17,13 +17,14 @@ const {
 	rewriteSvg, rewriteXmlText,
 	rewriteUrl,
 	sniffHtmlCharset,
+	sniffTextCharset,
 	stringifyInlineJson,
 } = await import(
 	'data:text/javascript;base64,' + Buffer.from(source + `
 export {
 	getRootHtml, getShimScript, MD3_JS, quoteCssString, rewriteCss,
 	rewriteJsModuleSpecifiers, rewriteRefreshContent, rewriteStyleAttr,
-	rewriteSvg, rewriteXmlText, rewriteUrl, sniffHtmlCharset, stringifyInlineJson
+	rewriteSvg, rewriteXmlText, rewriteUrl, sniffHtmlCharset, sniffTextCharset, stringifyInlineJson
 };`).toString('base64')
 );
 
@@ -528,4 +529,9 @@ test('XML scripts and styles rewrite across comment-guarded CDATA and bare query
 		rewriteXmlText('import "./a.js?x=1&amp;y=2";', js => rewriteJsModuleSpecifiers(js, base, origin)),
 		`import "${proxy('./a.js?x=1&amp;y=2')}";`
 	);
+});
+
+test('standalone SVG sniffs XML encoding declarations beyond 256 bytes', () => {
+	const prolog = `<?xml version="1.0"${' '.repeat(300)}encoding="windows-1252"?><svg>Café</svg>`;
+	assert.equal(sniffTextCharset(Buffer.from(prolog, 'latin1'), 'svg', null), 'windows-1252');
 });
