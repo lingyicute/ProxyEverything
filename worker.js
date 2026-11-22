@@ -1432,7 +1432,7 @@ if(window.Element){
   var oRANS=Element.prototype.removeAttributeNS;
   Element.prototype.setAttribute=function(n,v){
     try{
-      if(typeof n==='string'&&v!=null){
+      if(arguments.length>=2&&typeof n==='string'&&typeof v!=='symbol'){
         var ln=n.toLowerCase();
         var sv=v instanceof URL?v.href:String(v);
         var tag=normTag(this);
@@ -1463,7 +1463,7 @@ if(window.Element){
       if(n.slice(n.lastIndexOf(':')+1)!=='href')return oSANS.apply(this,arguments);
     }else if((ns!=null&&ns!=='')||n.indexOf(':')>=0)return oSANS.apply(this,arguments);
     try{
-      if(v!=null){
+      if(arguments.length>=3&&typeof v!=='symbol'){
         var local=ns===XLINK_NS?'xlink:href':n;
         var sv=v instanceof URL?v.href:String(v);
         var tag=normTag(this);
