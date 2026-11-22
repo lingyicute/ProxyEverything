@@ -120,3 +120,13 @@ test('Worker fetch accepts both new and previously encoded proxy paths', async (
 		globalThis.fetch = originalFetch;
 	}
 });
+
+test('empty and fragment-only import map scopes use the original base URL', () => {
+	const map = { scopes: { '': { pkg: './base.js' }, '#part': { pkg: './fragment.js' } } };
+	const scopes = JSON.parse(rewriteImportMap(JSON.stringify(map), base, proxy)).scopes;
+	const doc = rewriteUrl(base, base, proxy);
+	assert.deepEqual(scopes, {
+		[doc]: { pkg: rewriteUrl('./base.js', base, proxy) },
+		[doc + '#part']: { pkg: rewriteUrl('./fragment.js', base, proxy) },
+	});
+});

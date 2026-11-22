@@ -215,12 +215,11 @@ function isWorkerHost(u, workerOrigin) {
 	}
 }
 
-function rewriteUrl(value, baseUrl, workerOrigin) {
+function rewriteUrl(value, baseUrl, workerOrigin, resolveEmptyOrFragment = false) {
 	if (value == null) return value;
 	const v = trimUrlSpace(String(value));
-	if (!v) return v;
-	// 页内锚点（#foo、url(#gradient)）保持原样
-	if (v.startsWith('#')) return v;
+	// 资源中的页内锚点保持原样；需要完整 URL 的标识符或作用域例外。
+	if (!resolveEmptyOrFragment && (!v || v.startsWith('#'))) return v;
 	// 已经是本站代理 URL：经 URL 规范化以编码裸 <、> 等字符，避免透传进内联 raw-text
 	if (isProxiedPath(v)) {
 		try {
@@ -2405,7 +2404,7 @@ function rewriteImportMap(text, baseUrl, workerOrigin) {
 		const nextScopes = Object.create(null);
 		for (const [scopeKey, specMap] of Object.entries(map.scopes)) {
 			// 作用域前缀同样是文档基地址下的 URL，必须与被代理的模块 URL 使用同一种形式。
-			nextScopes[rewriteUrl(scopeKey, baseUrl, workerOrigin)] = rewriteSpecMap(specMap);
+			nextScopes[rewriteUrl(scopeKey, baseUrl, workerOrigin, true)] = rewriteSpecMap(specMap);
 		}
 		map.scopes = nextScopes;
 	}
