@@ -28,3 +28,13 @@ test('legacy Proxy-Connection is removed from upstream responses', async t => {
 	assert.equal(response.headers.get('X-End-To-End'), 'retain');
 	assert.equal(await response.text(), 'fixture');
 });
+
+test('the shared upstream header builder drops the entire X-Forwarded family', () => {
+	const input = request();
+	for (const name of ['X-Forwarded-For', 'X-Forwarded-Host', 'X-Forwarded-Prefix', 'X-Forwarded-Uri']) {
+		input.headers.set(name, 'fixture');
+	}
+	const headers = buildUpstreamHeaders(input, origin, target, env);
+	assert.ok([...headers.keys()].every(name => !name.startsWith('x-forwarded-')));
+	assert.equal(headers.get('X-End-To-End'), 'retain');
+});
