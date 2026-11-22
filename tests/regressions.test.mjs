@@ -489,3 +489,18 @@ test('homepage hue radios have one tab stop and wrap on arrow keys', () => {
 	assert.deepEqual(buttons.filter(b => b.attrs.get('aria-checked') === 'true'), [focused]);
 	assert.equal(storage.get('pe-hue'), '330');
 });
+
+test('dot segments in already-proxied URLs stay clamped within their target origin', () => {
+	assert.equal(
+		rewriteUrl('/~https%3A%2F%2Fexample.com/../other.example/secret?q=1#h', base, origin),
+		'/~https%3A%2F%2Fexample.com/other.example/secret?q=1#h'
+	);
+	assert.equal(
+		rewriteUrl('https://proxy.example/~https%3A%2F%2Fexample.com/../../other.example/secret', base, origin),
+		'https://proxy.example/~https%3A%2F%2Fexample.com/other.example/secret'
+	);
+	assert.equal(
+		rewriteUrl('//proxy.example/~https%3A%2F%2Fcdn.example/../asset.js', base, origin),
+		'https://proxy.example/~https%3A%2F%2Fcdn.example/asset.js'
+	);
+});

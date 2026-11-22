@@ -235,6 +235,28 @@ function isWorkerHost(u, workerOrigin) {
 	}
 }
 
+/** 已代理 URL 中的 .. 不能越过 /~来源 段逃逸成其它目标主机。 */
+function normalizeProxiedUrl(raw, workerOrigin, keepOrigin) {
+	const u = new URL(raw, workerOrigin);
+	const prefix = keepOrigin
+		? (u.protocol === 'ws:' || u.protocol === 'wss:' ? `${u.protocol}//${new URL(workerOrigin).host}` : workerOrigin)
+		: '';
+	if (isProxiedPath(u.pathname)) return `${prefix}${u.pathname}${urlSuffix(u)}`;
+	const cut = raw.search(/[?#]/);
+	const rawPath = (cut < 0 ? raw : raw.slice(0, cut)).replace(/^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/?#]*/i, '');
+	const suffix = cut < 0 ? '' : raw.slice(cut);
+	const decoded = decodeProxyPath(rawPath);
+	if (!decoded) return `${prefix}${u.pathname}${urlSuffix(u)}`;
+	const hashCut = suffix.indexOf('#');
+	const query = hashCut < 0 ? suffix : suffix.slice(0, hashCut);
+	const hash = hashCut < 0 ? '' : suffix.slice(hashCut);
+	const baseTarget = decoded.split('#', 1)[0];
+	const target = new URL(baseTarget + (query ? (baseTarget.includes('?') ? '&' : '?') + query.slice(1) : '') + hash);
+	const host = normalizeHostname(target.hostname);
+	if (host) target.hostname = host;
+	return prefix + encodeProxyPath(target);
+}
+
 function rewriteUrl(value, baseUrl, workerOrigin, resolveEmptyOrFragment = false) {
 	if (value == null) return value;
 	const v = trimUrlSpace(String(value));
@@ -242,15 +264,10 @@ function rewriteUrl(value, baseUrl, workerOrigin, resolveEmptyOrFragment = false
 	if (!resolveEmptyOrFragment && (!v || v.startsWith('#'))) return v;
 	// 已经是本站代理 URL：经 URL 规范化以编码裸 <、> 等字符，避免透传进内联 raw-text
 	if (isProxiedPath(v)) {
-		try {
-			const u = new URL(v, workerOrigin);
-			return u.pathname + urlSuffix(u);
-		} catch {
-			return v;
-		}
+		try { return normalizeProxiedUrl(v, workerOrigin, false); } catch { return v; }
 	}
 	if (v.startsWith(workerOrigin + '/') && isProxiedPath(v.slice(workerOrigin.length))) {
-		try { return new URL(v).href; } catch { return v; }
+		try { return normalizeProxiedUrl(v, workerOrigin, true); } catch { return v; }
 	}
 	try {
 		const abs = new URL(v, baseUrl);
@@ -259,15 +276,11 @@ function rewriteUrl(value, baseUrl, workerOrigin, resolveEmptyOrFragment = false
 			return v;
 		}
 		if (isWorkerHost(abs, workerOrigin)) {
+			const hasOrigin = /^([a-z][a-z0-9+.-]*:)?\/\//i.test(v);
+			const rawSelfPath = hasOrigin ? v.replace(/^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/?#]*/i, '') : '';
 			// 已代理（同源主机且路径是编码后的目标 URL）
-			if (isProxiedPath(abs.pathname)) {
-				if (!/^([a-z][a-z0-9+.-]*:)?\/\//i.test(v)) {
-					return abs.pathname + urlSuffix(abs);
-				}
-				const origin = abs.protocol === 'ws:' || abs.protocol === 'wss:'
-					? `${abs.protocol}//${new URL(workerOrigin).host}`
-					: workerOrigin;
-				return `${origin}${abs.pathname}${urlSuffix(abs)}`;
+			if (isProxiedPath(abs.pathname) || isProxiedPath(rawSelfPath)) {
+				return hasOrigin ? normalizeProxiedUrl(v, workerOrigin, true) : abs.pathname + urlSuffix(abs);
 			}
 			// 落到代理域自身的非代理路径：回退按目标基地址解析，避免触发自代理拦截
 			const rebound = new URL(new URL(baseUrl).origin + abs.pathname + urlSuffix(abs));
@@ -1110,6 +1123,33 @@ function base(){
   }
   return target;
 }
+function normProxied(raw,keepOrigin){
+  var pu=new URL(raw,WO);
+  var isWs=pu.protocol==='ws:'||pu.protocol==='wss:';
+  if(isProxiedPath(pu.pathname)){
+    if(!keepOrigin)return raw.indexOf('..')<0?raw:pu.pathname+urlSuffix(pu);
+    if(isWs){
+      var canonH=location.hostname||WOU.hostname;
+      if(canonH&&pu.hostname!==canonH)pu.hostname=canonH;
+      return pu.href;
+    }
+    return WO+pu.pathname+urlSuffix(pu);
+  }
+  var cut=raw.search(/[?#]/);
+  var rawPath=(cut<0?raw:raw.slice(0,cut)).replace(/^(?:[a-z][a-z0-9+.-]*:)?\\/\\/[^/?#]*/i,'');
+  var suffix=cut<0?'':raw.slice(cut);
+  var dec=decodeProxyPath(rawPath);
+  if(!dec)return keepOrigin?WO+pu.pathname+urlSuffix(pu):pu.pathname+urlSuffix(pu);
+  var hCut=suffix.indexOf('#');
+  var q=hCut<0?suffix:suffix.slice(0,hCut);
+  var h=hCut<0?'':suffix.slice(hCut);
+  var baseDec=dec.split('#',1)[0];
+  var tu=new URL(baseDec+(q?(baseDec.indexOf('?')>=0?'&':'?')+q.slice(1):'')+h);
+  var th=tu.hostname.toLowerCase().replace(/\\.+$/,'');
+  if(th){try{tu.hostname=th;}catch(e){}}
+  var prefix=keepOrigin?(isWs?pu.protocol+'//'+(location.host||WOU.host):WO):'';
+  return prefix+encodeProxyPath(tu);
+}
 function rp(v){
   if(v==null)return v;
   if(typeof v==='object'){
@@ -1118,21 +1158,15 @@ function rp(v){
   }
   var s=trimUrlSpace(String(v));
   if(!s||SKIP_RE.test(s))return s;
-  if(isProxiedPath(s))return s;
+  if(isProxiedPath(s)){try{return normProxied(s,false);}catch(e){return s;}}
   var forcedWs='';
   try{
     if(s===WO)s='/';
     else if(ABS_RE.test(s)||s.indexOf('//')===0){
       var pu=new URL(s,WO);
       if(isSelfHost(pu)){
-        if(isProxiedPath(pu.pathname)){
-          if(pu.protocol==='ws:'||pu.protocol==='wss:'){
-            var canonH=location.hostname||WOU.hostname;
-            if(canonH&&pu.hostname!==canonH)pu.hostname=canonH;
-            return pu.href;
-          }
-          return WO+pu.pathname+urlSuffix(pu);
-        }
+        var rawSelf=s.replace(/^(?:[a-z][a-z0-9+.-]*:)?\\/\\/[^/?#]*/i,'');
+        if(isProxiedPath(pu.pathname)||isProxiedPath(rawSelf))return normProxied(s,true);
         if(pu.protocol==='ws:'||pu.protocol==='wss:')forcedWs=pu.protocol;
         // 用完整来源拼接：已解析路径开头的双斜线不是新的主机名。
         s=new URL(base()).origin+pu.pathname+urlSuffix(pu);
