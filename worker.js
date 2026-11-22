@@ -1114,10 +1114,11 @@ function applyCachePolicy(response, request, ck) {
 // 让 JS 动态发起的请求（fetch/XHR/WebSocket/img.src 等）也走代理
 // ============================================================
 
-function getShimScript(workerOrigin, cookieNs) {
+function getShimScript(workerOrigin, cookieNs, isXml = false) {
 	// application/xhtml+xml 按 XML 解析，脚本里的 && 与 < 会让整页解析失败；
 	// CDATA 守卫在 HTML 中只是行注释，在 XHTML 中则保护脚本正文。
-	return `<script>//<![CDATA[
+	const openTag = isXml ? '<script xmlns="http://www.w3.org/1999/xhtml">' : '<script>';
+	return `${openTag}//<![CDATA[
 (function(){
 try{
 /* XHR/pjax 拉回的 HTML 片段同样注入了 shim，被 jQuery/Turbo 等再次执行时不能层层重复包裹原生 API */
@@ -2107,21 +2108,28 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 	let baseHref = baseUrl;
 	let sawBaseHref = false;
 	let hasBaseHref = false;
+	let sawRoot = false;
 	let templateDepth = 0;
 	const htmlNamespace = 'http://www.w3.org/1999/xhtml';
 	let injected = false;
-	const shim = getShimScript(workerOrigin, ck ? ck.ns : '');
+	const shim = getShimScript(workerOrigin, ck ? ck.ns : '', isXml);
 	const rw = (v) => rewriteUrl(v, baseHref, workerOrigin);
 
 	// 注入运行时 shim（head 优先，无 head 则 body 兜底）
 	rewriter.on('head', {
 		element(el) {
-			if (!injected) { injected = true; el.prepend(shim, { html: true }); }
+			if (!injected && !templateDepth && el.namespaceURI === htmlNamespace) {
+				injected = true;
+				el.prepend(shim, { html: true });
+			}
 		},
 	});
 	rewriter.on('body', {
 		element(el) {
-			if (!injected) { injected = true; el.prepend(shim, { html: true }); }
+			if (!injected && !templateDepth && el.namespaceURI === htmlNamespace) {
+				injected = true;
+				el.prepend(shim, { html: true });
+			}
 		},
 	});
 
@@ -2246,8 +2254,10 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			// （XHR 拉回的 HTML 片段、<frameset> 老页面等），上面的两个 handler
 			// 都不会触发，shim 就丢了。这里插到文档第一个非容器元素之前，
 			// 保证它仍然先于页面自身脚本执行。
+			const isRoot = !sawRoot;
+			sawRoot = true;
 			const tag = (el.tagName || '').toLowerCase();
-			if (!injected && tag !== 'html' && tag !== 'head' && tag !== 'body') {
+			if (!injected && !templateDepth && !(isXml && isRoot) && tag !== 'html' && tag !== 'head' && tag !== 'body') {
 				injected = true;
 				el.before(shim, { html: true });
 			}
