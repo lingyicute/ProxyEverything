@@ -957,6 +957,7 @@ function xmlDeclaredCharset(text) {
 
 /**
  * HTML 编码优先级：BOM > HTTP charset > 完整的 meta / XML 声明。
+ * 都没有时，HTML 前缀若不是合法 UTF-8 则回退 windows-1252；XML 默认 UTF-8。
  * 一旦确定编码就停止嗅探，不必等到 4096 字节/EOF 才开始向浏览器输出。
  * tee 的另一支保留全部字节；只在固定大小的前缀缓冲中检查声明。
  */
@@ -1000,6 +1001,12 @@ async function sniffHtmlCharset(body, declaredCharset = null, isXml = false) {
 		// 不 await：tee 另一支消费完之前 cancel 可能不 resolve。
 		reader.cancel().catch(() => {});
 		reader.releaseLock();
+	}
+	// 没有任何声明时浏览器不会假定 UTF-8：前缀不是合法 UTF-8 就使用 WHATWG 的通用回退编码。
+	// stream 模式容忍被 4096 字节边界截断的末尾序列。
+	if (!charset && !isXml && total) {
+		try { new TextDecoder('utf-8', { fatal: true }).decode(head.subarray(0, total), { stream: true }); }
+		catch { charset = 'windows-1252'; }
 	}
 	return { charset, body: b };
 }

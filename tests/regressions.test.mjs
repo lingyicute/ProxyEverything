@@ -455,6 +455,21 @@ test('an upstream status outside 200-599 yields the proxy error page for every m
 	}
 });
 
+test('undeclared HTML falls back to windows-1252 only when its prefix is not valid UTF-8', async () => {
+	const sniff = async (bytes, isXml = false) => {
+		const stream = new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } });
+		const result = await sniffHtmlCharset(stream, null, isXml);
+		assert.deepEqual(Buffer.from(await new Response(result.body).arrayBuffer()), Buffer.from(bytes));
+		return result.charset;
+	};
+	assert.equal(await sniff(Buffer.from('<p>caf\xe9</p>', 'latin1')), 'windows-1252');
+	assert.equal(await sniff(Buffer.from('<p>café 你好</p>')), null);
+	assert.equal(await sniff(Buffer.from('<p>plain</p>')), null);
+	// A multi-byte sequence cut by the 4096-byte sniffing window is not an encoding error.
+	assert.equal(await sniff(Buffer.from('x'.repeat(4095) + 'é'.repeat(8))), null);
+	assert.equal(await sniff(Buffer.from('<p>caf\xe9</p>', 'latin1'), true), null);
+});
+
 test('XML charset detection does not depend on the upstream chunk boundaries', async () => {
 	for (const charset of ['windows-1252', 'utf-16le', 'utf-16be']) {
 		const declaration = `<?xml version="1.0" encoding="${charset}"?>`;
