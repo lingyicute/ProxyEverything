@@ -2625,10 +2625,13 @@ function rewriteJsonUrls(text, baseUrl, workerOrigin) {
 		if (Array.isArray(list)) for (const item of list) fields(item, ['src']);
 	};
 	// id 按规范相对 start_url 的来源解析，而非 manifest 地址：否则 "?pwa"、"app" 这类 id 会拼到 manifest 所在路径上。
-	if (typeof manifest.id === 'string' && manifest.id.trim()) {
-		let idBase = baseUrl;
-		try { idBase = new URL(typeof manifest.start_url === 'string' ? manifest.start_url : '', baseUrl).origin + '/'; } catch {}
-		manifest.id = rewriteUrl(manifest.id, idBase, workerOrigin);
+	if (typeof manifest.id === 'string' && manifest.id !== '') {
+		let idBase = new URL('/', baseUrl).href;
+		try {
+			const start = new URL(typeof manifest.start_url === 'string' ? manifest.start_url : '', baseUrl);
+			if (start.protocol === 'http:' || start.protocol === 'https:') idBase = start.origin + '/';
+		} catch {}
+		manifest.id = rewriteUrl(manifest.id, idBase, workerOrigin, true);
 	}
 	fields(manifest, ['start_url', 'scope']);
 	images(manifest.icons);

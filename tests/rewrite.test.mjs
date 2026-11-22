@@ -165,6 +165,11 @@ test('manifest: id resolves against the start_url origin, other URLs against the
 		proxy('https://www.example.com/app/main'));
 	assert.equal(rewrite({ id: 'app' }).id, proxy('https://example.com/app'));
 	assert.equal(rewrite({ id: '' }).id, '');
+	assert.equal(rewrite({ id: '#variant' }).id, proxy('https://example.com/') + '#variant');
+	assert.equal(rewrite({ id: '   ' }).id, proxy('https://example.com/'));
+	for (const start_url of ['https://[', 'data:,document']) {
+		assert.equal(rewrite({ id: 'fallback', start_url }).id, proxy('https://example.com/fallback'));
+	}
 });
 
 test('HTTP downgrade does not forward Referer and a different proxy origin is not trusted', async () => {
