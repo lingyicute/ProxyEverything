@@ -2557,7 +2557,7 @@ function decodeXmlEntities(s) {
 }
 
 function hasCustomXmlEntity(s) {
-	return /&(?!(?:amp|lt|gt|quot|apos);)[^\s&#;<>]+;/.test(s);
+	return /&(?!(?:amp|lt|gt|quot|apos);)[A-Za-z_:\u00c0-\ud7ff\uf900-\ufdcf\ufdf0-\ufffd\u{10000}-\u{effff}][\w.:\u00b7-\ud7ff\uf900-\ufdcf\ufdf0-\ufffd\u{10000}-\u{effff}-]*;/u.test(s);
 }
 
 function escapeXmlAttr(s) {
