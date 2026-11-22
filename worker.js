@@ -1157,11 +1157,8 @@ function normProxied(raw,keepOrigin){
   return prefix+encodeProxyPath(tu);
 }
 function rp(v){
-  if(v==null)return v;
-  if(typeof v==='object'){
-    if(v instanceof URL)return rp(v.href);
-    return v;
-  }
+  if(v==null||typeof v==='symbol')return v;
+  if(v instanceof URL)return rp(v.href);
   var s=trimUrlSpace(String(v));
   if(!s||SKIP_RE.test(s))return s;
   if(isProxiedPath(s)){try{return normProxied(s,false);}catch(e){return s;}}
@@ -1190,11 +1187,16 @@ function rp(v){
 function rwUrlArg(a){
   if(typeof a==='string')return rp(a);
   if(a instanceof URL)return new URL(rp(a.href),location.href||WO);
+  if(a!=null&&typeof a!=='symbol')return rp(String(a));
   return a;
 }
 function rpBase(a){
-  if(typeof a==='string'&&!trimUrlSpace(a))return rp(base());
-  return rwUrlArg(a);
+  if(a instanceof URL)return new URL(rp(a.href),location.href||WO);
+  if(a!=null&&typeof a!=='symbol'){
+    var s=String(a);
+    return !trimUrlSpace(s)?rp(base()):rp(s);
+  }
+  return a;
 }
 function isProxyRequestUrl(value){
   try{var u=new URL(value,WO);return u.origin===WO&&isProxiedPath(u.pathname);}catch(e){return false;}
@@ -1281,17 +1283,16 @@ function wrapCtor(name,rewrite){
   return W;
 }
 wrapCtor('EventSource',rpBase);
-if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{u=typeof u==='string'&&!trimUrlSpace(u)?rp(base()):rp(u);}catch(e){}return arguments.length>1?oSB(u,d):oSB(u);};}
+if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{if(u!==undefined&&typeof u!=='symbol')u=rpBase(String(u));}catch(e){}return arguments.length>1?oSB(u,d):oSB(u);};}
 wrapCtor('Worker',rpBase);
 try{wrapCtor('SharedWorker',rpBase);}catch(e){}
-try{wrapCtor('Audio',rp);}catch(e){}
+try{wrapCtor('Audio',function(u){return u===undefined?u:rwUrlArg(u);});}catch(e){}
 /* Service Worker 无法在代理路径下正确工作，直接禁用注册以免站点异常 */
 try{if(navigator.serviceWorker)navigator.serviceWorker.register=function(){return Promise.reject(new Error('[ProxyEverything] service worker disabled'));};}catch(e){}
 /* ---- WebSocket：目标地址已在路径内，无需污染目标查询串 ---- */
 function rwWsUrl(u){
-  var nu=u;
-  if(typeof u==='string')nu=rp(u);
-  else if(u instanceof URL)nu=rp(u.href);
+  if(u==null||typeof u==='symbol')return u;
+  var nu=u instanceof URL?rp(u.href):rpBase(String(u));
   if(typeof nu==='string'){
     var au=new URL(nu,location.href||WO);
     if(au.origin===WO||au.origin===location.origin||isSelfHost(au)){
@@ -1321,14 +1322,14 @@ function wrapHistory(fn){return function(st,t,u){
 if(history.pushState)history.pushState=wrapHistory(history.pushState);
 if(history.replaceState)history.replaceState=wrapHistory(history.replaceState);
 var oWo=window.open;
-if(oWo)window.open=function(u){try{if(arguments.length&&u!=null)arguments[0]=rwUrlArg(u);}catch(e){}return oWo.apply(this,arguments);};
-try{var oAs=location.assign.bind(location);location.assign=function(u){return oAs(typeof u==='string'&&!trimUrlSpace(u)?rp(base()):rp(u));};}catch(e){}
-try{var oRe=location.replace.bind(location);location.replace=function(u){return oRe(typeof u==='string'&&!trimUrlSpace(u)?rp(base()):rp(u));};}catch(e){}
+if(oWo)window.open=function(u){try{if(arguments.length&&u!==undefined&&typeof u!=='symbol')arguments[0]=rwUrlArg(String(u));}catch(e){}return oWo.apply(this,arguments);};
+try{var oAs=location.assign.bind(location);location.assign=function(u){return oAs(u!==undefined&&typeof u!=='symbol'?rpBase(String(u)):u);};}catch(e){}
+try{var oRe=location.replace.bind(location);location.replace=function(u){return oRe(u!==undefined&&typeof u!=='symbol'?rpBase(String(u)):u);};}catch(e){}
 /* ---- DOM 属性 setter 拦截：img.src = "..." 等动态赋值 ---- */
 ${mapPingUrls.toString()}
-function rwPing(v){return typeof v==='string'?mapPingUrls(v,rp):v;}
-function rwAnchorArg(v){return typeof v==='string'||v instanceof URL?rwNavigation(String(v),true):v;}
-function rwFormArg(v){return typeof v==='string'||v instanceof URL?rwNavigation(String(v),false):v;}
+function rwPing(v){return v!=null&&typeof v!=='symbol'?mapPingUrls(String(v),rp):v;}
+function rwAnchorArg(v){return v!=null&&typeof v!=='symbol'?rwNavigation(String(v),true):v;}
+function rwFormArg(v){return v!=null&&typeof v!=='symbol'?rwNavigation(String(v),false):v;}
 function patchSetter(ctor,prop,rewrite=rwUrlArg){
   try{
     if(!ctor||!ctor.prototype)return;
@@ -1344,7 +1345,7 @@ function patchSetter(ctor,prop,rewrite=rwUrlArg){
 /* 与服务端共享同一解析器，保留候选 URL 内部的逗号。 */
 ${isSrcsetSpace.toString()}
 ${mapSrcset.toString()}
-function rwSrcset(v){return typeof v==='string'?mapSrcset(v,rp):v;}
+function rwSrcset(v){return v!=null&&typeof v!=='symbol'?mapSrcset(String(v),rp):v;}
 var I=window.HTMLImageElement;
 patchSetter(I,'src');patchSetter(I,'srcset',rwSrcset);
 patchSetter(window.HTMLScriptElement,'src');

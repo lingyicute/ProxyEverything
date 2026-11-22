@@ -306,3 +306,39 @@ test('shim ignores foreign base elements and freezes at the first HTML base with
 	firstBase.removeAttribute('href');
 	assert.equal(ctx.window.__PE__.rp('rel.js'), origin + '/~' + encodeURIComponent('https://other.example') + '/sub/rel.js');
 });
+
+test('shim coerces non-string URL objects, WebSocket empty base, and null attribute values', () => {
+	let beaconUrl = null, assignedUrl = null;
+	class WebSocket { constructor(u) { this.url = u; } }
+	class XMLHttpRequest { open(m, u) { this.url = u; } }
+	const { ctx } = createBrowser({
+		WebSocket,
+		XMLHttpRequest,
+		navigator: { sendBeacon(u) { beaconUrl = u; return true; } },
+		location: {
+			href: proxy('/dir/page'), origin, protocol: 'https:', hostname: 'proxy.example', port: '',
+			pathname: '/~' + encodeURIComponent('https://example.com') + '/dir/page', search: '',
+			assign(u) { assignedUrl = u; },
+			replace() {},
+		},
+	});
+	ctx.document.querySelectorAll = () => [{ getAttribute: name => name === 'data-pe-base' ? 'https://example.com/sub/' : null }];
+
+	assert.equal(new ctx.WebSocket('').url, 'wss://proxy.example/~https%3A%2F%2Fexample.com/sub/');
+	const urlLike = { toString: () => '/api/v1' };
+	const xhr = new ctx.XMLHttpRequest();
+	xhr.open('GET', urlLike);
+	assert.equal(xhr.url, proxy('/api/v1'));
+	ctx.navigator.sendBeacon(urlLike);
+	assert.equal(beaconUrl, proxy('/api/v1'));
+	ctx.location.assign(urlLike);
+	assert.equal(assignedUrl, proxy('/api/v1'));
+
+	const script = new ctx.Element('script');
+	script.setAttribute('integrity', 'sha256-x');
+	script.setAttribute('integrity', null);
+	assert.equal(script.getAttribute('integrity'), null);
+	const img = new ctx.Element('img');
+	img.setAttribute('src', null);
+	assert.equal(img.getAttribute('src'), proxy('/sub/null'));
+});
