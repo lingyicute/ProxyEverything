@@ -2756,7 +2756,7 @@ const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => 
 			let next;
 			// 保留原生片段引用的含义，但让浏览器解析片段时也留在代理基地址内。
 			if (name === 'xml:base' && localName) next = rewriteUrl(elementBase, baseUrl, workerOrigin);
-			else if (XML_REFERENCE_ATTRS.has(name) || xlinkHref) next = rw(decoded);
+			else if (XML_REFERENCE_ATTRS.has(name) || xlinkHref || (name === 'data' && localName === 'object')) next = rw(decoded);
 			else if (name === 'srcset' || name === 'imagesrcset') next = rewriteSrcset(decoded, elementBase, workerOrigin);
 			else if (name === 'ping') next = rewritePing(decoded, elementBase, workerOrigin);
 			else if (SVG_CSS_ATTRS.has(name)) next = rewriteStyleAttr(decoded, elementBase, workerOrigin);

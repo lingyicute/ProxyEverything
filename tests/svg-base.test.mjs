@@ -65,3 +65,11 @@ test('SVG resolves XLink href by namespace URI rather than a fixed prefix', () =
 	assert.equal(rewrite(input), input.replace('ref:href="first.png"', `ref:href="${proxy('/dir/first.png')}"`)
 		.replace('ref:href="last.png"', `ref:href="${proxy('/dir/last.png')}"`));
 });
+
+test('SVG rewrites object data attributes without touching custom data attributes', () => {
+	const input = '<svg><g data="raw"/><foreignObject><object xmlns="http://www.w3.org/1999/xhtml" data="embed.html"/></foreignObject></svg>';
+	assert.equal(
+		rewrite(input),
+		`<svg><g data="raw"/><foreignObject><object xmlns="http://www.w3.org/1999/xhtml" data="${proxy('/dir/embed.html')}"/></foreignObject></svg>`
+	);
+});
