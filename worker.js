@@ -2476,7 +2476,8 @@ function escapeXmlAttr(s) {
 }
 
 const XML_ATTR = /([ \t\n\r])([^\s"'<>\/=]+)(\s*=\s*)(?:"([^"]*)"|'([^']*)')/g;
-const XML_REFERENCE_ATTRS = new Set(['href', 'xlink:href', 'src', 'action', 'formaction', 'poster']);
+const XML_REFERENCE_ATTRS = new Set(['href', 'src', 'action', 'formaction', 'poster']);
+const XML_XLINK_NS = 'http://www.w3.org/1999/xlink';
 const SVG_CSS_ATTRS = new Set(['style', 'fill', 'stroke', 'filter', 'clip-path', 'mask', 'marker', 'marker-start', 'marker-mid', 'marker-end', 'cursor']);
 
 /** 顺序读 XML 标记，避免在未闭合的标签、注释或 CDATA 上反复回溯。 */
@@ -2561,6 +2562,15 @@ const rewriteXmlText = capRewriteGrowth((account, body, transform) => {
 const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => {
 	const out = [];
 	const scopes = [{ name: null, base: baseUrl }];
+	const xlinkPrefixes = new Set();
+	const restorePrefixes = (bindings) => {
+		if (!bindings) return;
+		for (let i = bindings.length - 1; i >= 0; i--) {
+			const [prefix, wasXlink] = bindings[i];
+			if (wasXlink) xlinkPrefixes.add(prefix);
+			else xlinkPrefixes.delete(prefix);
+		}
+	};
 	let cursor = 0;
 	for (let start; (start = source.indexOf('<', cursor)) !== -1;) {
 		out.push(source.slice(cursor, start));
@@ -2569,7 +2579,9 @@ const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => 
 		cursor = end;
 		const closingName = kind === 'tag' ? /^<\/([^\s\/>]+)[ \t\n\r]*>/.exec(tag)?.[1] : null;
 		if (closingName) {
-			if (scopes.length > 1 && scopes[scopes.length - 1].name === closingName) scopes.pop();
+			if (scopes.length > 1 && scopes[scopes.length - 1].name === closingName) {
+				restorePrefixes(scopes.pop().bindings);
+			}
 			out.push(tag);
 			continue;
 		}
@@ -2582,16 +2594,28 @@ const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => 
 		}
 		if (!localName && !stylesheet) { out.push(tag); continue; }
 		let elementBase = scopes[scopes.length - 1].base;
+		let bindings = null;
 		if (localName) {
-			// xml:base 作用于本元素及后代，而非文档余下部分；先解析它，再处理其它属性。
+			// 声明作用于本元素及后代；前缀不必叫 xlink，也可能被同名的其他命名空间遮蔽。
+			let sawBase = false;
 			for (const [, , name, , dq, sq] of tag.matchAll(XML_ATTR)) {
-				if (name !== 'xml:base') continue;
 				const raw = dq ?? sq;
+				if (name.startsWith('xmlns:')) {
+					const prefix = name.slice(6);
+					const wasXlink = xlinkPrefixes.has(prefix);
+					const isXlink = decodeXmlAttribute(raw) === XML_XLINK_NS;
+					if (wasXlink !== isXlink) {
+						(bindings || (bindings = [])).push([prefix, wasXlink]);
+						if (isXlink) xlinkPrefixes.add(prefix);
+						else xlinkPrefixes.delete(prefix);
+					}
+				}
+				if (name !== 'xml:base' || sawBase) continue;
+				sawBase = true;
 				try {
 					if (hasCustomXmlEntity(raw)) throw new Error();
 					elementBase = new URL(decodeXmlAttribute(raw), elementBase ?? undefined).href;
 				} catch { elementBase = null; }
-				break;
 			}
 		}
 		const rw = v => elementBase === null ? v : rewriteUrl(v, elementBase, workerOrigin);
@@ -2600,21 +2624,22 @@ const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => 
 		out.push(tag.replace(XML_ATTR, (m, space, name, equals, dq, sq) => {
 			const raw = dq ?? sq;
 			if (name === 'type' && type === undefined) type = decodeXmlAttribute(raw).trim().toLowerCase();
-			if (name === 'src' || name === 'href' || name === 'xlink:href') hasRef = true;
+			const xlinkHref = localName && name.endsWith(':href') && xlinkPrefixes.has(name.slice(0, -5));
+			if (name === 'src' || name === 'href' || xlinkHref) hasRef = true;
 			if (name === 'integrity' && (localName === 'script' || localName === 'link')) return '';
 			if (hasCustomXmlEntity(raw) || elementBase === null) return m;
 			const decoded = decodeXmlAttribute(raw);
 			let next;
 			// 保留原生片段引用的含义，但让浏览器解析片段时也留在代理基地址内。
 			if (name === 'xml:base' && localName) next = rewriteUrl(elementBase, baseUrl, workerOrigin);
-			else if (XML_REFERENCE_ATTRS.has(name)) next = rw(decoded);
+			else if (XML_REFERENCE_ATTRS.has(name) || xlinkHref) next = rw(decoded);
 			else if (name === 'srcset' || name === 'imagesrcset') next = rewriteSrcset(decoded, elementBase, workerOrigin);
 			else if (name === 'ping' && decoded.trim()) next = decoded.trim().split(/\s+/).map(rw).join(' ');
 			else if (SVG_CSS_ATTRS.has(name)) next = rewriteStyleAttr(decoded, elementBase, workerOrigin);
 			return next === undefined || next === decoded ? m : account(m.length, `${space}${name}${equals}"${escapeXmlAttr(next)}"`);
 		}));
-		if (!localName || tag.endsWith('/>')) continue;
-		scopes.push({ name: qualifiedName, base: elementBase });
+		if (!localName || tag.endsWith('/>')) { restorePrefixes(bindings); continue; }
+		scopes.push({ name: qualifiedName, base: elementBase, bindings });
 		const rewrite = localName === 'style' ? rewriteCss : localName === 'script' && !hasRef && type === 'module' ? rewriteJsModuleSpecifiers : null;
 		if (!rewrite) continue;
 		const close = readXmlTextEnd(source, cursor, qualifiedName);
@@ -2623,7 +2648,7 @@ const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => 
 			const rewritten = elementBase === null ? text : rewriteXmlText(text, part => rewrite(part, elementBase, workerOrigin));
 			out.push(account(text.length, rewritten), source.slice(close.start, close.end));
 			cursor = close.end;
-			scopes.pop(); // 上面的扫描已消费这个元素的闭合标签。
+			restorePrefixes(scopes.pop().bindings); // 扫描已消费这个元素的闭合标签。
 		}
 	}
 	out.push(source.slice(cursor));

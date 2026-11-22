@@ -56,3 +56,12 @@ test('real Workerd: standalone SVG inherits and rewrites xml:base', {
 	assert.equal(response.status, 200);
 	assert.equal(await response.text(), `<svg xmlns="http://www.w3.org/2000/svg" xml:base="${proxy('/images/')}"><image href="${proxy('/images/logo.png')}"/></svg>`);
 });
+
+test('SVG resolves XLink href by namespace URI rather than a fixed prefix', () => {
+	const input = '<svg xmlns:ref="http://www.w3.org/1999/xlink" xmlns:xlink="urn:metadata">' +
+		'<image ref:href="first.png" xlink:href="label"/>' +
+		'<g xmlns:ref="urn:other"><image ref:href="label"/></g>' +
+		'<image ref:href="label" xmlns:ref="urn:other"/><image ref:href="last.png"/></svg>';
+	assert.equal(rewrite(input), input.replace('ref:href="first.png"', `ref:href="${proxy('/dir/first.png')}"`)
+		.replace('ref:href="last.png"', `ref:href="${proxy('/dir/last.png')}"`));
+});
