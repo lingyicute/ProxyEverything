@@ -443,6 +443,18 @@ test('a leaked "/" from a proxied page reaches the target root instead of the ho
 	assert.match(await failed.text(), /<a [^>]*href="\/" rel="noreferrer"/);
 });
 
+test('an upstream status outside 200-599 yields the proxy error page for every method', async t => {
+	t.mock.method(globalThis, 'fetch', async () => ({
+		status: 999, statusText: '', headers: new Headers({ 'Content-Type': 'text/html' }), body: null,
+	}));
+	for (const method of ['GET', 'HEAD']) {
+		const response = await worker.fetch(new Request(proxy('https://example.com/blocked'), { method }), {
+			ALLOWED_TARGET_ORIGINS: 'https://example.com',
+		});
+		assert.equal(response.status, 502, method);
+	}
+});
+
 test('XML charset detection does not depend on the upstream chunk boundaries', async () => {
 	for (const charset of ['windows-1252', 'utf-16le', 'utf-16be']) {
 		const declaration = `<?xml version="1.0" encoding="${charset}"?>`;
