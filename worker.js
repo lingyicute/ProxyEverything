@@ -2337,6 +2337,13 @@ Disallow: /wss%3A
 			return errorPage(targetUrl.href, e);
 		}
 
+		// Response 构造器只接受 200–599。LinkedIn 的 999 这类状态无法转发，统一按上游失败处理，
+		// 否则 try 之外的 HEAD/重定向分支会抛出未捕获的 RangeError。
+		if (upstream.status < 200 || upstream.status > 599) {
+			if (upstream.body) upstream.body.cancel().catch(() => {});
+			return errorPage(targetUrl.href, new Error(`HTTP ${upstream.status}`));
+		}
+
 		// ---- 重定向 ----
 		if (REDIRECT_STATUS.has(upstream.status)) {
 			const resp = buildResponse(upstream, request, ck, fetchUrl);
