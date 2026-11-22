@@ -1018,7 +1018,8 @@ function applyCachePolicy(response, request, ck) {
 	if (ck?.varyOnReferer) addVary(response.headers, 'Referer');
 	addVary(response.headers, 'Cookie');
 	addVary(response.headers, 'Authorization');
-	if (request && transformKind(response.headers, request)) addVary(response.headers, 'Cache-Control');
+	// 304 等响应可能没有 Content-Type，仍需保留已缓存 GET 的 no-transform 分桶。
+	addVary(response.headers, 'Cache-Control');
 	// 缓存也必须区分会被入口拒绝的 Service Worker 脚本请求。
 	addVary(response.headers, 'Service-Worker');
 	addVary(response.headers, 'Sec-Fetch-Dest');

@@ -272,3 +272,19 @@ test('hardening a personalized response preserves the upstream no-transform dire
 	assert.equal(r.headers.get('cache-control'), 'no-store, no-transform');
 	assert.equal(await r.text(), '@import "tile.css";');
 });
+
+test('bodyless revalidation preserves the request cache policy variant without Content-Type', async t => {
+	let status = 200;
+	t.mock.method(globalThis, 'fetch', () => new Response(status === 200 ? 'a{}' : null, {
+		status, headers: status === 200 ? { 'Content-Type': 'text/css', ETag: '"source"' } : { ETag: '"source"' },
+	}));
+	const request = new Request(proxy('https://example.com/style.css'), { headers: { 'Cache-Control': 'no-transform' } });
+	const env = { ALLOWED_TARGET_ORIGINS: 'https://example.com' };
+	const raw = await worker.fetch(request, env);
+	status = 304;
+	const refreshed = await worker.fetch(request, env);
+	assert.equal(refreshed.status, 304);
+	assert.match(refreshed.headers.get('Vary'), /\bCache-Control\b/i);
+	assert.equal(refreshed.headers.get('Vary'), raw.headers.get('Vary'));
+	assert.equal(refreshed.headers.get('ETag'), raw.headers.get('ETag'));
+});
