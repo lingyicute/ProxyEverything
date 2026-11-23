@@ -71,9 +71,9 @@ test('SVG resolves XLink href by namespace URI rather than a fixed prefix', () =
 });
 
 test('SVG rewrites object data attributes without touching custom data attributes', () => {
-	const input = '<svg><g data="raw" action="save" formaction="next"/><foreignObject><object xmlns="http://www.w3.org/1999/xhtml" data="embed.html"/><form xmlns="http://www.w3.org/1999/xhtml" action="submit"><button formaction="go"/></form></foreignObject></svg>';
+	const input = '<svg><g data="raw" action="save" formaction="next" ping="1"/><foreignObject><object xmlns="http://www.w3.org/1999/xhtml" data="embed.html"/><form xmlns="http://www.w3.org/1999/xhtml" action="submit"><button formaction="go"/><button formaction=" "/></form></foreignObject></svg>';
 	assert.equal(
 		rewrite(input),
-		`<svg><g data="raw" action="save" formaction="next"/><foreignObject><object xmlns="http://www.w3.org/1999/xhtml" data="${proxy('/dir/embed.html')}"/><form xmlns="http://www.w3.org/1999/xhtml" action="${proxy('/dir/submit')}"><button formaction="${proxy('/dir/go')}"/></form></foreignObject></svg>`
+		`<svg><g data="raw" action="save" formaction="next" ping="1"/><foreignObject><object xmlns="http://www.w3.org/1999/xhtml" data="${proxy('/dir/embed.html')}"/><form xmlns="http://www.w3.org/1999/xhtml" action="${proxy('/dir/submit')}"><button formaction="${proxy('/dir/go')}"/><button formaction=" "/></form></foreignObject></svg>`
 	);
 });

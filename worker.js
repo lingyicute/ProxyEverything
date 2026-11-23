@@ -2882,10 +2882,10 @@ const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => 
 			if (name === 'xml:base' && localName) next = rewriteUrl(elementBase, baseUrl, workerOrigin);
 			else if (XML_REFERENCE_ATTRS.has(name) || xlinkHref ||
 				(name === 'data' && localName === 'object') ||
-				(name === 'action' && localName === 'form') ||
-				(name === 'formaction' && (localName === 'input' || localName === 'button'))) next = rw(decoded);
+				(((name === 'action' && localName === 'form') ||
+				(name === 'formaction' && (localName === 'input' || localName === 'button'))) && trimUrlSpace(decoded))) next = rw(decoded);
 			else if (name === 'srcset' || name === 'imagesrcset') next = rewriteSrcset(decoded, elementBase, workerOrigin);
-			else if (name === 'ping') next = rewritePing(decoded, elementBase, workerOrigin);
+			else if (name === 'ping' && (localName === 'a' || localName === 'area')) next = rewritePing(decoded, elementBase, workerOrigin);
 			else if (SVG_CSS_ATTRS.has(name)) next = rewriteStyleAttr(decoded, elementBase, workerOrigin);
 			return next === undefined || next === decoded ? m : account(m.length, `${space}${name}${equals}"${escapeXmlAttr(next)}"`);
 		}));
