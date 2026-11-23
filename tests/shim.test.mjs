@@ -402,7 +402,7 @@ test('shim ignores foreign base elements and freezes at the first HTML base with
 });
 
 test('shim coerces non-string URL objects, WebSocket empty base, and null attribute values', () => {
-	let beaconUrl = null, assignedUrl = null, fetchedUrl = null;
+	let beaconUrl = null, assignedUrl = null, fetchedUrl = null, fetchedInit = null, openedUrl = null;
 	class WebSocket { constructor(u) { this.url = u; } }
 	class Audio { constructor(u) { this.src = u; } }
 	class HTMLImageElement { set src(v) { this.value = v; } set srcset(v) { this.srcsetValue = v; } }
@@ -414,7 +414,8 @@ test('shim coerces non-string URL objects, WebSocket empty base, and null attrib
 		HTMLImageElement,
 		HTMLAnchorElement,
 		XMLHttpRequest,
-		fetch: async u => { fetchedUrl = u; },
+		open(u) { openedUrl = u; },
+		fetch: async (u, init) => { fetchedUrl = u; fetchedInit = init; },
 		navigator: { sendBeacon(u) { beaconUrl = u; return true; } },
 		location: {
 			href: proxy('/dir/page'), origin, protocol: 'https:', hostname: 'proxy.example', port: '',
@@ -426,20 +427,33 @@ test('shim coerces non-string URL objects, WebSocket empty base, and null attrib
 	ctx.document.querySelectorAll = () => [{ getAttribute: name => name === 'data-pe-base' ? 'https://example.com/sub/' : null }];
 
 	assert.equal(new ctx.WebSocket('').url, 'wss://proxy.example/~https%3A%2F%2Fexample.com/sub/');
+	assert.equal(new ctx.WebSocket('#live').url, 'wss://proxy.example/~https%3A%2F%2Fexample.com/sub/#live');
 	assert.equal(new ctx.WebSocket(null).url, 'wss://proxy.example/~https%3A%2F%2Fexample.com/sub/null');
 	assert.equal(new ctx.Audio(null).src, proxy('/sub/null'));
 	const urlLike = { toString: () => '/api/v1' };
 	const xhr = new ctx.XMLHttpRequest();
 	xhr.open('GET', urlLike);
 	assert.equal(xhr.url, proxy('/api/v1'));
+	xhr.open('GET', '#part');
+	assert.equal(xhr.url, proxy('/sub/#part'));
 	xhr.open('GET', null);
 	assert.equal(xhr.url, proxy('/sub/null'));
-	ctx.fetch(null);
+	ctx.fetch(null, { referrer: null });
 	assert.equal(fetchedUrl, proxy('/sub/null'));
+	assert.equal(fetchedInit.referrer, proxy('/sub/null'));
+	ctx.fetch('#frag', { referrer: '#ref' });
+	assert.equal(fetchedUrl, proxy('/sub/#frag'));
+	assert.equal(fetchedInit.referrer, proxy('/sub/#ref'));
 	ctx.navigator.sendBeacon(urlLike);
 	assert.equal(beaconUrl, proxy('/api/v1'));
+	ctx.location.assign('#section');
+	assert.equal(assignedUrl, proxy('/sub/#section'));
 	ctx.location.assign(urlLike);
 	assert.equal(assignedUrl, proxy('/api/v1'));
+	ctx.window.open('');
+	assert.equal(openedUrl, '');
+	ctx.window.open('#popup');
+	assert.equal(openedUrl, proxy('/sub/#popup'));
 
 	const imageProp = new ctx.HTMLImageElement();
 	imageProp.src = null;

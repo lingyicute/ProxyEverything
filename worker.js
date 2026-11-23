@@ -1324,10 +1324,7 @@ function rwUrlArg(a){
 }
 function rpBase(a){
   if(a instanceof URL)return new URL(rp(a.href),location.href||WO);
-  if(typeof a!=='symbol'){
-    var s=String(a);
-    return !trimUrlSpace(s)?rp(base()):rp(s);
-  }
+  if(typeof a!=='symbol')return rwNavigation(String(a),true);
   return a;
 }
 function isProxyRequestUrl(value){
@@ -1336,7 +1333,7 @@ function isProxyRequestUrl(value){
 function rwInit(init,stripIntegrity){
   if(init!=null&&typeof init!=='object'&&typeof init!=='function')return init;
   var ref=init?.referrer;
-  var next=ref!==undefined&&ref!==null&&ref!==''&&ref!=='about:client'?rp(String(ref)):ref;
+  var next=ref!==undefined&&ref!==''&&ref!=='about:client'?rwNavigation(String(ref),false):ref;
   if(next===ref&&!stripIntegrity)return init;
   // Fetch reads RequestInit as a dictionary, including inherited and non-enumerable
   // properties. Do not copy it with Object.assign or mutate the caller's object.
@@ -1454,7 +1451,7 @@ function wrapHistory(fn){return function(st,t,u){
 if(history.pushState)history.pushState=wrapHistory(history.pushState);
 if(history.replaceState)history.replaceState=wrapHistory(history.replaceState);
 var oWo=window.open;
-if(oWo)window.open=function(u){try{if(arguments.length&&u!==undefined&&typeof u!=='symbol')arguments[0]=rwUrlArg(String(u));}catch(e){}return oWo.apply(this,arguments);};
+if(oWo)window.open=function(u){try{if(arguments.length&&u!==undefined&&typeof u!=='symbol')arguments[0]=rwNavigation(String(u),false);}catch(e){}return oWo.apply(this,arguments);};
 try{var oAs=location.assign.bind(location);location.assign=function(u){return arguments.length?oAs(typeof u!=='symbol'?rpBase(String(u)):u):oAs();};}catch(e){}
 try{var oRe=location.replace.bind(location);location.replace=function(u){return arguments.length?oRe(typeof u!=='symbol'?rpBase(String(u)):u):oRe();};}catch(e){}
 /* Location 的 href/assign/replace 不可配置，上面两行在真实浏览器中不会生效。支持 Navigation API 时在此兜底：
