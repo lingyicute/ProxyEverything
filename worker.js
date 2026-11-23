@@ -276,6 +276,36 @@ function normalizeProxiedUrl(raw, workerOrigin, keepOrigin, parsed = null) {
 	return prefix + encodeProxyPath(target);
 }
 
+/** 将 <base href> 或 xml:base 解析为真实目标基地址，解包已代理路径或代理域自身地址。 */
+function resolveTargetBaseUrl(raw, fallbackBase, workerOrigin, httpOnly = false) {
+	if (!fallbackBase) return '';
+	const clean = trimUrlSpace(String(raw)).replace(/[\t\r\n]/g, '');
+	const allow = (u) => !httpOnly || u.protocol === 'http:' || u.protocol === 'https:';
+	if (isProxiedPath(clean)) {
+		const cut = clean.search(/[?#]/);
+		const target = decodeProxiedTarget(cut < 0 ? clean : clean.slice(0, cut), cut < 0 ? '' : clean.slice(cut));
+		if (target && allow(target)) return target.href;
+	}
+	try {
+		const u = new URL(raw, fallbackBase);
+		if (!allow(u)) return '';
+		if (isWorkerHost(u, workerOrigin)) {
+			const rawSelf = clean
+				.replace(/^(?:[a-z][a-z0-9+.-]*:[\/\\]*|[\/\\]{2,})[^\/\\?#]*/i, '')
+				.replace(/\\/g, '/');
+			if (isProxiedPath(rawSelf)) {
+				const cut = clean.search(/[?#]/);
+				const target = decodeProxiedTarget(rawSelf, cut < 0 ? '' : clean.slice(cut));
+				if (target && allow(target)) return target.href;
+			}
+			return new URL(new URL(fallbackBase).origin + u.pathname + urlSuffix(u)).href;
+		}
+		return u.href;
+	} catch {
+		return '';
+	}
+}
+
 function rewriteUrl(value, baseUrl, workerOrigin, resolveEmptyOrFragment = false) {
 	if (value == null) return value;
 	const v = trimUrlSpace(String(value));
@@ -1194,6 +1224,30 @@ var full=DEC+(search?(DEC.indexOf('?')>=0?'&':'?')+search.substring(1):'');
 try{var u=new URL(full);if(u.protocol==='ws:')u.protocol='http:';else if(u.protocol==='wss:')u.protocol='https:';u.username='';u.password='';u.hostname=u.hostname.toLowerCase().replace(/\\.+$/,'');return u.href;}catch(e){return full;}
 }
 var SKIP_RE=/^(data:|blob:|javascript:|mailto:|tel:|sms:|about:|#)/i;
+function resolveBase(h,target){
+  var clean=trimUrlSpace(String(h)).replace(/[\\t\\r\\n]/g,'');
+  if(!clean)return target;
+  if(SKIP_RE.test(clean)&&clean.charAt(0)!=='#')return '';
+  if(isProxiedPath(clean)){
+    var cut0=clean.search(/[?#]/);
+    var t0=decodeProxiedTarget(cut0<0?clean:clean.slice(0,cut0),cut0<0?'':clean.slice(cut0));
+    if(t0&&(t0.protocol==='http:'||t0.protocol==='https:'))return t0.href;
+  }
+  try{
+    var u=new URL(h,target);
+    if(u.protocol!=='http:'&&u.protocol!=='https:')return '';
+    if(isSelfHost(u)){
+      var rawSelf=clean.replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
+      if(isProxiedPath(rawSelf)){
+        var cut1=clean.search(/[?#]/);
+        var t1=decodeProxiedTarget(rawSelf,cut1<0?'':clean.slice(cut1));
+        if(t1&&(t1.protocol==='http:'||t1.protocol==='https:'))return t1.href;
+      }
+      return new URL(new URL(target).origin+u.pathname+urlSuffix(u)).href;
+    }
+    return u.href;
+  }catch(e){return '';}
+}
 function base(){
   var target=currentTarget();
   var list=document.querySelectorAll?document.querySelectorAll('base[data-pe-base],base[href]'):[];
@@ -1204,7 +1258,7 @@ function base(){
     var pe=b.getAttribute('data-pe-base');
     var h=pe!==null?pe:b.getAttribute('href');
     if(h===null)continue;
-    if(h){try{var u=new URL(h,target);if(u.protocol==='http:'||u.protocol==='https:')return u.href;}catch(e){}}
+    if(h){var rb=resolveBase(h,target);if(rb)return rb;}
     return target;
   }
   return target;
@@ -1482,8 +1536,8 @@ try{
           var pe=this.getAttribute('data-pe-base');
           var h=pe!==null?pe:this.getAttribute('href');
           if(h!==null){
-            if(h){try{var u=new URL(h,currentTarget());if(u.protocol==='http:'||u.protocol==='https:')return u.href;}catch(e){}}
-            return currentTarget();
+            var target=currentTarget();
+            return (h&&resolveBase(h,target))||target;
           }
           return base();
         },
@@ -1539,12 +1593,7 @@ if(window.Element){
           return;
         }
         if(ln==='href'&&tag==='BASE'&&isHtmlEl(this)){
-          var nextBase='';
-          try{
-            var bUrl=new URL(sv,currentTarget());
-            if(bUrl.protocol==='http:'||bUrl.protocol==='https:')nextBase=bUrl.href;
-          }catch(e){}
-          oSA.call(this,'data-pe-base',nextBase);
+          oSA.call(this,'data-pe-base',resolveBase(sv,currentTarget()));
           if(oRA)oRA.call(this,'href');
           return;
         }
@@ -1570,12 +1619,7 @@ if(window.Element){
           return;
         }
         if(local==='href'&&tag==='BASE'&&isHtmlEl(this)){
-          var nextBase='';
-          try{
-            var bUrl=new URL(sv,currentTarget());
-            if(bUrl.protocol==='http:'||bUrl.protocol==='https:')nextBase=bUrl.href;
-          }catch(e){}
-          oSA.call(this,'data-pe-base',nextBase);
+          oSA.call(this,'data-pe-base',resolveBase(sv,currentTarget()));
           if(oRA)oRA.call(this,'href');
           return;
         }
@@ -2213,13 +2257,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck, sourceCharset = null
 			if (templateDepth || el.namespaceURI !== htmlNamespace) return;
 			if (el.hasAttribute('href')) {
 				const h = getHtmlAttribute(el, 'href', isXml);
-				let nextBase = '';
-				if (h != null) {
-					try {
-						const u = new URL(h, baseUrl);
-						if (u.protocol === 'http:' || u.protocol === 'https:') nextBase = u.href;
-					} catch {}
-				}
+				const nextBase = h != null ? resolveTargetBaseUrl(h, baseUrl, workerOrigin, true) : '';
 				if (!sawBaseHref) {
 					sawBaseHref = true;
 					if (nextBase) {
@@ -2828,10 +2866,7 @@ const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => 
 				}
 				if (name !== 'xml:base' || sawBase) continue;
 				sawBase = true;
-				try {
-					if (hasCustomXmlEntity(raw)) throw new Error();
-					elementBase = new URL(decodeXmlAttribute(raw), elementBase ?? undefined).href;
-				} catch { elementBase = null; }
+				elementBase = hasCustomXmlEntity(raw) ? null : (resolveTargetBaseUrl(decodeXmlAttribute(raw), elementBase, workerOrigin) || null);
 			}
 		}
 		const rw = v => elementBase === null ? v : rewriteUrl(v, elementBase, workerOrigin);

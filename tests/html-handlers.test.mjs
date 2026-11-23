@@ -172,3 +172,19 @@ test('HTML base freezes at the first base element with href even when disallowed
 	handlers.a[0].element(link);
 	assert.equal(link.getAttribute('href'), proxy('/dir/rel.html'));
 });
+
+test('HTML base unwraps already-proxied and proxy-host URLs to their target base', () => {
+	for (const [href, expectedBase, expectedLink] of [
+		['/~https%3A%2F%2Fother.example/sub/', 'https://other.example/sub/', origin + '/~' + encodeURIComponent('https://other.example') + '/sub/rel.html'],
+		[proxy('/sub/'), 'https://example.com/sub/', proxy('/sub/rel.html')],
+		[origin + '/sub/', 'https://example.com/sub/', proxy('/sub/rel.html')],
+	]) {
+		const handlers = collectHandlers();
+		const baseEl = element('base', { href });
+		handlers.base[0].element(baseEl);
+		assert.equal(baseEl.getAttribute('data-pe-base'), expectedBase, href);
+		const link = element('a', { href: 'rel.html' });
+		handlers.a[0].element(link);
+		assert.equal(link.getAttribute('href'), expectedLink, href);
+	}
+});

@@ -389,6 +389,16 @@ test('shim ignores foreign base elements and freezes at the first HTML base with
 	assert.equal(ctx.window.__PE__.rp('rel.js'), proxy('/dir/rel.js'));
 	firstBase.removeAttribute('href');
 	assert.equal(ctx.window.__PE__.rp('rel.js'), origin + '/~' + encodeURIComponent('https://other.example') + '/sub/rel.js');
+
+	for (const [href, expectedBase, expectedRootRel] of [
+		['/~https%3A%2F%2Fother.example/sub/', 'https://other.example/sub/', origin + '/~' + encodeURIComponent('https://other.example') + '/api'],
+		[proxy('/sub/'), 'https://example.com/sub/', proxy('/api')],
+		[origin + '/sub/', 'https://example.com/sub/', proxy('/api')],
+	]) {
+		secondBase.setAttribute('href', href);
+		assert.equal(secondBase.getAttribute('data-pe-base'), expectedBase, href);
+		assert.equal(ctx.window.__PE__.rp('/api'), expectedRootRel, href);
+	}
 });
 
 test('shim coerces non-string URL objects, WebSocket empty base, and null attribute values', () => {
