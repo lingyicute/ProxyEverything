@@ -2811,12 +2811,17 @@ const rewriteSvg = capRewriteGrowth((account, source, baseUrl, workerOrigin) => 
 		}));
 		if (!localName || tag.endsWith('/>')) { restorePrefixes(bindings); continue; }
 		scopes.push({ name: qualifiedName, base: elementBase, bindings });
-		const rewrite = localName === 'style' ? rewriteCss : localName === 'script' && !hasRef && type === 'module' ? rewriteJsModuleSpecifiers : null;
+		const rewrite = localName === 'style' ? rewriteCss
+			: localName === 'script' && !hasRef
+				? (type === 'module' ? rewriteJsModuleSpecifiers
+					: type === 'importmap' ? rewriteImportMap
+						: type === 'speculationrules' ? rewriteSpeculationRules : null)
+				: null;
 		if (!rewrite) continue;
 		const close = readXmlTextEnd(source, cursor, qualifiedName);
 		if (close) {
 			const text = source.slice(cursor, close.start);
-			const rewritten = elementBase === null ? text : rewriteXmlText(text, part => rewrite(part, elementBase, workerOrigin));
+			const rewritten = elementBase === null ? text : rewriteXmlText(text, part => rewrite(part, elementBase, workerOrigin, baseUrl));
 			out.push(account(text.length, rewritten), source.slice(close.start, close.end));
 			cursor = close.end;
 			restorePrefixes(scopes.pop().bindings); // 扫描已消费这个元素的闭合标签。

@@ -24,8 +24,8 @@ test('SVG xml:base on a self-closing element cannot affect its siblings', () => 
 });
 
 test('SVG styles and modules inherit xml:base without leaking their own scope', () => {
-	const input = '<svg xml:base="/assets/"><style xml:base="paint/">a{fill:url(p.svg#x)}</style><script type="module" xml:base="js/">import "./entry.js";</script><image href="last.png"/></svg>';
-	assert.equal(rewrite(input), `<svg xml:base="${proxy('/assets/')}"><style xml:base="${proxy('/assets/paint/')}">a{fill:url("${proxy('/assets/paint/p.svg#x')}")}</style><script type="module" xml:base="${proxy('/assets/js/')}">import "${proxy('/assets/js/entry.js')}";</script><image href="${proxy('/assets/last.png')}"/></svg>`);
+	const input = '<svg xml:base="/assets/"><style xml:base="paint/">a{fill:url(p.svg#x)}</style><script type="module" xml:base="js/">import "./entry.js";</script><script type="importmap">{"imports":{"pkg":"./pkg.js"}}</script><script type="speculationrules">{"prefetch":[{"urls":["./next.svg"]},{"relative_to":"document","urls":["./doc.svg"]}]}</script><image href="last.png"/></svg>';
+	assert.equal(rewrite(input), `<svg xml:base="${proxy('/assets/')}"><style xml:base="${proxy('/assets/paint/')}">a{fill:url("${proxy('/assets/paint/p.svg#x')}")}</style><script type="module" xml:base="${proxy('/assets/js/')}">import "${proxy('/assets/js/entry.js')}";</script><script type="importmap">{"imports":{"pkg":"${proxy('/assets/pkg.js')}"}}</script><script type="speculationrules">{"prefetch":[{"urls":["${proxy('/assets/next.svg')}"]},{"relative_to":"document","urls":["${proxy('/dir/doc.svg')}"]}]}</script><image href="${proxy('/assets/last.png')}"/></svg>`);
 });
 
 test('SVG preserves fragment semantics and uses exact qualified names for base scopes', () => {
