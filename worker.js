@@ -1407,8 +1407,10 @@ function bufferedTextHandler(rewrite, matches = () => true) {
 	};
 }
 
-function transformHtml(response, baseUrl, workerOrigin, ck) {
+function transformHtml(response, baseUrl, workerOrigin, ck, sourceCharset = null) {
 	const rewriter = new HTMLRewriter();
+	// 输出统一为 UTF-8。未声明编码的外部经典脚本原本按文档编码解码，透传时需要显式保留原编码。
+	const scriptCharset = sourceCharset && !isUtf8Charset(sourceCharset) ? sourceCharset : null;
 	let baseHref = baseUrl;
 	let sawBaseHref = false;
 	let hasBaseHref = false;
@@ -1512,6 +1514,11 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			element(el) {
 				// 内容被我们改写过的资源必须去掉 SRI，否则哈希校验失败被浏览器拦截
 				if (tag === 'script' || tag === 'link') el.removeAttribute('integrity');
+				// 改写后的脚本带 charset=UTF-8 响应头，优先于此属性；它只影响原样透传的脚本。
+				if (tag === 'script' && scriptCharset && el.namespaceURI === htmlNamespace &&
+					el.hasAttribute('src') && !el.hasAttribute('charset')) {
+					el.setAttribute('charset', scriptCharset);
+				}
 				for (const [attr, kind] of attrs) {
 					const v = el.getAttribute(attr);
 					if (v == null) continue;
@@ -2455,7 +2462,7 @@ Disallow: /wss%3A
 		// 避免 HTMLRewriter 按 meta 里的旧 charset 重新编码输出）
 		if (isHtml) {
 			const interim = makeInterim((mime || 'text/html') + '; charset=UTF-8');
-			return applyCommon(transformHtml(interim, baseUrl, workerOrigin, ck), request, ck);
+			return applyCommon(transformHtml(interim, baseUrl, workerOrigin, ck, charset), request, ck);
 		}
 
 		// 整体缓冲的资源可能超限并转为字节透传；先保留原始表示元数据，

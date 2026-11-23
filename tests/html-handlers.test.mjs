@@ -13,19 +13,35 @@ const origin = 'https://proxy.example';
 const proxy = path => origin + '/' + encodeURIComponent('https://example.com') + path;
 
 /** HTMLRewriter 只在 Workers 运行时存在：记录各选择器的处理器，直接驱动元素回调。 */
-function collectHandlers() {
+function collectHandlers(contentType = 'text/html', sourceCharset = null) {
 	const handlers = {};
 	globalThis.HTMLRewriter = class {
 		on(selector, handler) { (handlers[selector] ||= []).push(handler); return this; }
 		transform(response) { return response; }
 	};
 	try {
-		transformHtml(new Response('', { headers: { 'content-type': 'text/html' } }), base, origin, null);
+		transformHtml(new Response('', { headers: { 'content-type': contentType } }), base, origin, null, sourceCharset);
 	} finally {
 		delete globalThis.HTMLRewriter;
 	}
 	return handlers;
 }
+
+test('html: external scripts keep the source document encoding after transcoding to UTF-8', () => {
+	const run = (handlers, attrs) => {
+		const el = element('script', attrs);
+		for (const h of handlers.script) h.element(el);
+		return el.getAttribute('charset');
+	};
+	const legacy = collectHandlers('text/html', 'gbk');
+	assert.equal(run(legacy, { src: 'a.js' }), 'gbk');
+	assert.equal(run(legacy, { src: 'a.js', charset: 'utf-8' }), 'utf-8', 'an explicit charset wins');
+	assert.equal(run(legacy, {}), null, 'inline scripts are not fetched');
+	assert.equal(run(collectHandlers('application/xhtml+xml', 'windows-1252'), { src: 'a.js' }), 'windows-1252');
+	for (const charset of [null, 'utf-8']) {
+		assert.equal(run(collectHandlers('text/html', charset), { src: 'a.js' }), null, String(charset));
+	}
+});
 
 function element(tag, attrs) {
 	const map = new Map(Object.entries(attrs));
