@@ -99,6 +99,29 @@ test('oversized decoded HTTP streams do not re-use the original encoded validato
 	assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
 });
 
+test('undeclared JavaScript that is not valid UTF-8 keeps its original bytes', async () => {
+	// "你好" in GBK: browsers decode such classic scripts with <script charset> or the document encoding.
+	const gbk = Buffer.concat([Buffer.from('import "./a.js";alert("'), Buffer.from([0xc4, 0xe3, 0xba, 0xc3]), Buffer.from('");')]);
+	const response = await proxyResponse(gbk, 'application/javascript', '/assets/legacy.js');
+	assert.equal(response.status, 200);
+	assert.equal(response.headers.get('content-type'), 'application/javascript');
+	assert.equal(response.headers.get('content-length'), String(gbk.length));
+	assert.equal(response.headers.get('etag'), '"source-v1"');
+	assert.deepEqual(Buffer.from(await response.arrayBuffer()), gbk);
+
+	// Valid UTF-8 and scripts with a declared charset are still decoded and rewritten.
+	for (const [bytes, type] of [
+		[Buffer.from('import "./a.js";alert("你好");'), 'application/javascript'],
+		[gbk, 'application/javascript; charset=gbk'],
+	]) {
+		const out = await proxyResponse(bytes, type, '/assets/main.js');
+		assert.equal(out.headers.get('content-type'), 'application/javascript; charset=UTF-8', type);
+		const text = await out.text();
+		assert.ok(text.includes(`"${origin}/~https%3A%2F%2Fsite.example/assets/a.js"`), text);
+		assert.ok(text.includes('alert("你好")'), text);
+	}
+});
+
 test('bounded text reader accepts fragmented multibyte text', async () => {
 	const input = '海😀'.repeat(700);
 	const bytes = Buffer.from(input);

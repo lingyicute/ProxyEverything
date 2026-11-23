@@ -2353,7 +2353,10 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 // CSS Syntax §3.2 指定字节签名而非一般 at-rule；含终止符最多 1024 字节。
 const CSS_CHARSET_SIGNATURE = /^@charset "([\x00-\x21\x23-\x7f]{0,1012})";/;
 
-/** 整体缓冲文本的编码：BOM > HTTP charset > CSS @charset 或 XML 声明，默认 UTF-8。 */
+/**
+ * 整体缓冲文本的编码：BOM > HTTP charset > CSS @charset 或 XML 声明，默认 UTF-8。
+ * JavaScript 没有任何声明时返回 null：经典脚本原本沿用引用文档的编码，交由调用方校验。
+ */
 function sniffTextCharset(bytes, kind, declaredCharset = null) {
 	const head = bytes.subarray(0, kind === 'css' ? 1024 : kind === 'svg' ? 4096 : 256);
 	if (head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
@@ -2368,7 +2371,7 @@ function sniffTextCharset(bytes, kind, declaredCharset = null) {
 	if (kind === 'svg') {
 		return utf16XmlSignature(head) || xmlDeclaredCharset(new TextDecoder().decode(head)) || 'utf-8';
 	}
-	return 'utf-8';
+	return kind === 'js' ? null : 'utf-8';
 }
 
 function replayBody(reader, prefix, tail) {
@@ -2430,7 +2433,15 @@ async function readTransformText(body, kind = '', declaredCharset = null) {
 			size = nextSize;
 		}
 		const bytes = buffer.subarray(0, size);
-		return { text: new TextDecoder(sniffTextCharset(bytes, kind, declaredCharset)).decode(bytes), passthrough: null };
+		const charset = sniffTextCharset(bytes, kind, declaredCharset);
+		if (charset) return { text: new TextDecoder(charset).decode(bytes), passthrough: null };
+		// 未声明编码的经典脚本由浏览器按 <script charset> 或文档编码解码，代理无从得知。
+		// 不是合法 UTF-8 时保留原始字节，不能把 GBK 等旧编码的文本替换成 U+FFFD 后再标成 UTF-8。
+		try {
+			return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), passthrough: null };
+		} catch {
+			return { text: null, passthrough: bytes };
+		}
 	} catch (error) {
 		reader.cancel(error).catch(() => {});
 		throw error;
