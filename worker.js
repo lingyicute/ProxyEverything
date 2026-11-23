@@ -1625,7 +1625,7 @@ function sniffTextChunkCharset(chunks, kind, declaredCharset = null) {
 		const m = /^\s*<\?xml\b[^>]{0,200}?\bencoding\s*=\s*(["'])\s*([^"'\s]{1,64})\s*\1[^>]*\?>/i.exec(ascii);
 		if (m) return normalizeCharsetLabel(m[2], false) || 'utf-8';
 	}
-	return 'utf-8';
+	return kind === 'js' ? null : 'utf-8';
 }
 
 async function readTransformText(body, kind = '', declaredCharset = null) {
@@ -1667,11 +1667,30 @@ async function readTransformText(body, kind = '', declaredCharset = null) {
 			chunks.push(value);
 		}
 		const effectiveCharset = sniffTextChunkCharset(chunks, kind, declaredCharset);
-		const decoder = new TextDecoder(effectiveCharset);
-		const parts = [];
-		for (const c of chunks) parts.push(decoder.decode(c, { stream: true }));
-		parts.push(decoder.decode());
-		return { text: parts.join(''), passthrough: null, charset: effectiveCharset };
+		if (effectiveCharset) {
+			const decoder = new TextDecoder(effectiveCharset);
+			const parts = [];
+			for (const c of chunks) parts.push(decoder.decode(c, { stream: true }));
+			parts.push(decoder.decode());
+			return { text: parts.join(''), passthrough: null, charset: effectiveCharset };
+		}
+		// 未声明编码的经典脚本由浏览器按 <script charset> 或文档编码解码，代理无从得知。
+		// 不是合法 UTF-8 时保留原始字节，不能把 GBK 等旧编码的文本替换成 U+FFFD 后再标成 UTF-8。
+		try {
+			const decoder = new TextDecoder('utf-8', { fatal: true });
+			const parts = [];
+			for (const c of chunks) parts.push(decoder.decode(c, { stream: true }));
+			parts.push(decoder.decode());
+			return { text: parts.join(''), passthrough: null, charset: 'utf-8' };
+		} catch {
+			const passthrough = new Uint8Array(bytes);
+			let offset = 0;
+			for (const c of chunks) {
+				passthrough.set(c, offset);
+				offset += c.byteLength;
+			}
+			return { text: null, passthrough, charset: null };
+		}
 	} catch (error) {
 		reader.cancel(error).catch(() => {});
 		throw error;
