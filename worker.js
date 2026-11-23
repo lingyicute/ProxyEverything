@@ -1245,12 +1245,12 @@ function rp(v){
 function rwUrlArg(a){
   if(typeof a==='string')return rp(a);
   if(a instanceof URL)return new URL(rp(a.href),location.href||WO);
-  if(a!=null&&typeof a!=='symbol')return rp(String(a));
+  if(typeof a!=='symbol')return rp(String(a));
   return a;
 }
 function rpBase(a){
   if(a instanceof URL)return new URL(rp(a.href),location.href||WO);
-  if(a!=null&&typeof a!=='symbol'){
+  if(typeof a!=='symbol'){
     var s=String(a);
     return !trimUrlSpace(s)?rp(base()):rp(s);
   }
@@ -1283,7 +1283,7 @@ function nativeRequestUrl(input){
 function requestArgs(input,init){
   var original=nativeRequestUrl(input);
   if(original===null){
-    var value=input==null||typeof input==='symbol'?input:rpBase(String(input));
+    var value=typeof input==='symbol'?input:rpBase(String(input));
     return [value,rwInit(init,Boolean(init?.integrity&&isProxyRequestUrl(value)))];
   }
   var url=rp(original);
@@ -1321,7 +1321,7 @@ if(of_)window.fetch=function(input,init){
 /* ---- XMLHttpRequest ---- */
 var oOpen=XMLHttpRequest.prototype.open;
 XMLHttpRequest.prototype.open=function(m,u){
-  try{arguments[1]=rpBase(u);}catch(e){}
+  if(arguments.length>=2){try{arguments[1]=rpBase(u);}catch(e){}}
   return oOpen.apply(this,arguments);
 };
 /* ---- EventSource / sendBeacon / Worker / Audio / WebSocket ---- */
@@ -1341,7 +1341,7 @@ function wrapCtor(name,rewrite){
   return W;
 }
 wrapCtor('EventSource',rpBase);
-if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{if(u!==undefined&&typeof u!=='symbol')u=rpBase(String(u));}catch(e){}return arguments.length>1?oSB(u,d):oSB(u);};}
+if(navigator.sendBeacon){var oSB=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(u,d){try{if(arguments.length&&typeof u!=='symbol')u=rpBase(String(u));}catch(e){}return arguments.length>1?oSB(u,d):arguments.length?oSB(u):oSB();};}
 wrapCtor('Worker',rpBase);
 try{wrapCtor('SharedWorker',rpBase);}catch(e){}
 try{wrapCtor('Audio',function(u){return u===undefined?u:rwUrlArg(u);});}catch(e){}
@@ -1349,7 +1349,7 @@ try{wrapCtor('Audio',function(u){return u===undefined?u:rwUrlArg(u);});}catch(e)
 try{if(navigator.serviceWorker)navigator.serviceWorker.register=function(){return Promise.reject(new Error('[ProxyEverything] service worker disabled'));};}catch(e){}
 /* ---- WebSocket：目标地址已在路径内，无需污染目标查询串 ---- */
 function rwWsUrl(u){
-  if(u==null||typeof u==='symbol')return u;
+  if(typeof u==='symbol')return u;
   var nu=u instanceof URL?rp(u.href):rpBase(String(u));
   if(typeof nu==='string'){
     var au=new URL(nu,location.href||WO);
@@ -1381,8 +1381,8 @@ if(history.pushState)history.pushState=wrapHistory(history.pushState);
 if(history.replaceState)history.replaceState=wrapHistory(history.replaceState);
 var oWo=window.open;
 if(oWo)window.open=function(u){try{if(arguments.length&&u!==undefined&&typeof u!=='symbol')arguments[0]=rwUrlArg(String(u));}catch(e){}return oWo.apply(this,arguments);};
-try{var oAs=location.assign.bind(location);location.assign=function(u){return oAs(u!==undefined&&typeof u!=='symbol'?rpBase(String(u)):u);};}catch(e){}
-try{var oRe=location.replace.bind(location);location.replace=function(u){return oRe(u!==undefined&&typeof u!=='symbol'?rpBase(String(u)):u);};}catch(e){}
+try{var oAs=location.assign.bind(location);location.assign=function(u){return arguments.length?oAs(typeof u!=='symbol'?rpBase(String(u)):u):oAs();};}catch(e){}
+try{var oRe=location.replace.bind(location);location.replace=function(u){return arguments.length?oRe(typeof u!=='symbol'?rpBase(String(u)):u):oRe();};}catch(e){}
 /* Location 的 href/assign/replace 不可配置，上面两行在真实浏览器中不会生效。支持 Navigation API 时在此兜底：
    把脚本或漏改链接发起的、会离开代理或落到未改写路径的跨文档导航改道；POST 表单与下载保持原样。 */
 try{
@@ -1404,9 +1404,9 @@ try{
 }catch(e){}
 /* ---- DOM 属性 setter 拦截：img.src = "..." 等动态赋值 ---- */
 ${mapPingUrls.toString()}
-function rwPing(v){return v!=null&&typeof v!=='symbol'?mapPingUrls(String(v),rp):v;}
-function rwAnchorArg(v){return v!=null&&typeof v!=='symbol'?rwNavigation(String(v),true):v;}
-function rwFormArg(v){return v!=null&&typeof v!=='symbol'?rwNavigation(String(v),false):v;}
+function rwPing(v){return typeof v!=='symbol'?mapPingUrls(String(v),rp):v;}
+function rwAnchorArg(v){return typeof v!=='symbol'?rwNavigation(String(v),true):v;}
+function rwFormArg(v){return typeof v!=='symbol'?rwNavigation(String(v),false):v;}
 function patchSetter(ctor,prop,rewrite=rwUrlArg){
   try{
     if(!ctor||!ctor.prototype)return;
@@ -1422,7 +1422,7 @@ function patchSetter(ctor,prop,rewrite=rwUrlArg){
 /* 与服务端共享同一解析器，保留候选 URL 内部的逗号。 */
 ${isSrcsetSpace.toString()}
 ${mapSrcset.toString()}
-function rwSrcset(v){return v!=null&&typeof v!=='symbol'?mapSrcset(String(v),rp):v;}
+function rwSrcset(v){return typeof v!=='symbol'?mapSrcset(String(v),rp):v;}
 var I=window.HTMLImageElement;
 patchSetter(I,'src');patchSetter(I,'srcset',rwSrcset);
 patchSetter(window.HTMLScriptElement,'src');

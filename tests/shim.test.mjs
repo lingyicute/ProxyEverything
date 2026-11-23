@@ -381,12 +381,19 @@ test('shim ignores foreign base elements and freezes at the first HTML base with
 });
 
 test('shim coerces non-string URL objects, WebSocket empty base, and null attribute values', () => {
-	let beaconUrl = null, assignedUrl = null;
+	let beaconUrl = null, assignedUrl = null, fetchedUrl = null;
 	class WebSocket { constructor(u) { this.url = u; } }
+	class Audio { constructor(u) { this.src = u; } }
+	class HTMLImageElement { set src(v) { this.value = v; } set srcset(v) { this.srcsetValue = v; } }
+	class HTMLAnchorElement { set href(v) { this.value = v; } set ping(v) { this.pingValue = v; } }
 	class XMLHttpRequest { open(m, u) { this.url = u; } }
 	const { ctx } = createBrowser({
 		WebSocket,
+		Audio,
+		HTMLImageElement,
+		HTMLAnchorElement,
 		XMLHttpRequest,
+		fetch: async u => { fetchedUrl = u; },
 		navigator: { sendBeacon(u) { beaconUrl = u; return true; } },
 		location: {
 			href: proxy('/dir/page'), origin, protocol: 'https:', hostname: 'proxy.example', port: '',
@@ -398,14 +405,31 @@ test('shim coerces non-string URL objects, WebSocket empty base, and null attrib
 	ctx.document.querySelectorAll = () => [{ getAttribute: name => name === 'data-pe-base' ? 'https://example.com/sub/' : null }];
 
 	assert.equal(new ctx.WebSocket('').url, 'wss://proxy.example/~https%3A%2F%2Fexample.com/sub/');
+	assert.equal(new ctx.WebSocket(null).url, 'wss://proxy.example/~https%3A%2F%2Fexample.com/sub/null');
+	assert.equal(new ctx.Audio(null).src, proxy('/sub/null'));
 	const urlLike = { toString: () => '/api/v1' };
 	const xhr = new ctx.XMLHttpRequest();
 	xhr.open('GET', urlLike);
 	assert.equal(xhr.url, proxy('/api/v1'));
+	xhr.open('GET', null);
+	assert.equal(xhr.url, proxy('/sub/null'));
+	ctx.fetch(null);
+	assert.equal(fetchedUrl, proxy('/sub/null'));
 	ctx.navigator.sendBeacon(urlLike);
 	assert.equal(beaconUrl, proxy('/api/v1'));
 	ctx.location.assign(urlLike);
 	assert.equal(assignedUrl, proxy('/api/v1'));
+
+	const imageProp = new ctx.HTMLImageElement();
+	imageProp.src = null;
+	assert.equal(imageProp.value, proxy('/sub/null'));
+	imageProp.srcset = null;
+	assert.equal(imageProp.srcsetValue, proxy('/sub/null'));
+	const anchorProp = new ctx.HTMLAnchorElement();
+	anchorProp.href = undefined;
+	assert.equal(anchorProp.value, proxy('/sub/undefined'));
+	anchorProp.ping = null;
+	assert.equal(anchorProp.pingValue, proxy('/sub/null'));
 
 	const script = new ctx.Element('script');
 	script.setAttribute('integrity', 'sha256-x');
