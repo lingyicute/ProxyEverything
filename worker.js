@@ -970,11 +970,12 @@ async function sniffHtmlCharset(body, declaredCharset = null, isXml = false) {
 	const reader = a.getReader();
 	const head = new Uint8Array(4096);
 	let total = 0;
+	let eof = false;
 	let charset = declaredCharset;
 	try {
 		while (total < head.length) {
 			const { done, value } = await reader.read();
-			if (done) break;
+			if (done) { eof = true; break; }
 			const prefix = value.subarray(0, head.length - total);
 			head.set(prefix, total);
 			total += prefix.length;
@@ -1006,9 +1007,9 @@ async function sniffHtmlCharset(body, declaredCharset = null, isXml = false) {
 		reader.releaseLock();
 	}
 	// 没有任何声明时浏览器不会假定 UTF-8：前缀不是合法 UTF-8 就使用 WHATWG 的通用回退编码。
-	// stream 模式容忍被 4096 字节边界截断的末尾序列。
+	// 未到 EOF 时用 stream 模式容忍被 4096 字节边界截断的末尾序列。
 	if (!charset && !isXml && total) {
-		try { new TextDecoder('utf-8', { fatal: true }).decode(head.subarray(0, total), { stream: true }); }
+		try { new TextDecoder('utf-8', { fatal: true }).decode(head.subarray(0, total), { stream: !eof }); }
 		catch { charset = 'windows-1252'; }
 	}
 	return { charset, body: b };

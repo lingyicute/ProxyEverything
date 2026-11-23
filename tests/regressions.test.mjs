@@ -463,6 +463,8 @@ test('undeclared HTML falls back to windows-1252 only when its prefix is not val
 		return result.charset;
 	};
 	assert.equal(await sniff(Buffer.from('<p>caf\xe9</p>', 'latin1')), 'windows-1252');
+	assert.equal(await sniff(Buffer.from('caf\xe9', 'latin1')), 'windows-1252');
+	assert.equal(await sniff(Buffer.from('caf\xe9\xa0', 'latin1')), 'windows-1252');
 	assert.equal(await sniff(Buffer.from('<p>café 你好</p>')), null);
 	assert.equal(await sniff(Buffer.from('<p>plain</p>')), null);
 	// A multi-byte sequence cut by the 4096-byte sniffing window is not an encoding error.
