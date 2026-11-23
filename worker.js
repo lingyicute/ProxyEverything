@@ -220,9 +220,28 @@ function decodeProxyPath(pathname) {
 	return origin + (cut === -1 ? '/' : raw.slice(cut));
 }
 
+function decodeProxiedTarget(rawPath, suffix = '') {
+	const decoded = decodeProxyPath(rawPath);
+	if (!decoded) return null;
+	const hashCut = suffix.indexOf('#');
+	const query = hashCut < 0 ? suffix : suffix.slice(0, hashCut);
+	const hash = hashCut < 0 ? '' : suffix.slice(hashCut);
+	const baseTarget = decoded.split('#', 1)[0];
+	try {
+		const target = new URL(baseTarget + (query ? (baseTarget.includes('?') ? '&' : '?') + query.slice(1) : '') + hash);
+		if (!['http:', 'https:', 'ws:', 'wss:'].includes(target.protocol)) return null;
+		const host = normalizeHostname(target.hostname);
+		if (!host) return null;
+		target.hostname = host;
+		return target;
+	} catch {
+		return null;
+	}
+}
+
 // 这些纯函数也供无依赖的浏览器脚本使用，避免引入不同的编解码规则。
 function browserPathHelpers() {
-	return [safeDecode, trimUrlSpace, urlSuffix, encodeProxyPath, isProxiedPath, decodeProxyPath].map(fn => fn.toString()).join('\n');
+	return [safeDecode, trimUrlSpace, normalizeHostname, urlSuffix, encodeProxyPath, isProxiedPath, decodeProxyPath, decodeProxiedTarget].map(fn => fn.toString()).join('\n');
 }
 
 /** 判断 URL 是否指向代理 Worker 自身主机与端口（忽略协议差异与尾点） */
@@ -240,27 +259,20 @@ function isWorkerHost(u, workerOrigin) {
 
 /** 已代理 URL 中的 .. 不能越过 /~来源 段逃逸成其它目标主机。 */
 function normalizeProxiedUrl(raw, workerOrigin, keepOrigin, parsed = null) {
-	const u = parsed || new URL(raw, workerOrigin);
+	const clean = raw.replace(/[\t\r\n]/g, '');
+	const u = parsed || new URL(clean, workerOrigin);
 	const prefix = keepOrigin
 		? (u.protocol === 'ws:' || u.protocol === 'wss:' ? `${u.protocol}//${new URL(workerOrigin).host}` : workerOrigin)
 		: '';
-	const cut = raw.search(/[?#]/);
-	const rawPath = (cut < 0 ? raw : raw.slice(0, cut))
+	const cut = clean.search(/[?#]/);
+	const rawPath = (cut < 0 ? clean : clean.slice(0, cut))
 		.replace(/^(?:[a-z][a-z0-9+.-]*:[\/\\]*|[\/\\]{2,})[^\/\\?#]*/i, '')
 		.replace(/\\/g, '/');
+	const target = decodeProxiedTarget(rawPath, cut < 0 ? '' : clean.slice(cut));
+	if (!target) return null;
 	if (!/\/(?:\.|%2e){2}(?:\/|$)/i.test(rawPath) && isProxiedPath(u.pathname)) {
 		return `${prefix}${u.pathname}${urlSuffix(u)}`;
 	}
-	const suffix = cut < 0 ? '' : raw.slice(cut);
-	const decoded = decodeProxyPath(rawPath);
-	if (!decoded) return `${prefix}${u.pathname}${urlSuffix(u)}`;
-	const hashCut = suffix.indexOf('#');
-	const query = hashCut < 0 ? suffix : suffix.slice(0, hashCut);
-	const hash = hashCut < 0 ? '' : suffix.slice(hashCut);
-	const baseTarget = decoded.split('#', 1)[0];
-	const target = new URL(baseTarget + (query ? (baseTarget.includes('?') ? '&' : '?') + query.slice(1) : '') + hash);
-	const host = normalizeHostname(target.hostname);
-	if (host) target.hostname = host;
 	return prefix + encodeProxyPath(target);
 }
 
@@ -269,12 +281,19 @@ function rewriteUrl(value, baseUrl, workerOrigin, resolveEmptyOrFragment = false
 	const v = trimUrlSpace(String(value));
 	// 资源中的页内锚点保持原样；需要完整 URL 的标识符或作用域例外。
 	if (!resolveEmptyOrFragment && (!v || v.startsWith('#'))) return v;
+	const clean = v.replace(/[\t\r\n]/g, '');
 	// 已经是本站代理 URL：经 URL 规范化以编码裸 <、> 等字符，避免透传进内联 raw-text
-	if (isProxiedPath(v)) {
-		try { return normalizeProxiedUrl(v, workerOrigin, false); } catch { return v; }
+	if (isProxiedPath(clean)) {
+		try {
+			const norm = normalizeProxiedUrl(clean, workerOrigin, false);
+			if (norm) return norm;
+		} catch { return v; }
 	}
-	if (v.startsWith(workerOrigin + '/') && isProxiedPath(v.slice(workerOrigin.length))) {
-		try { return normalizeProxiedUrl(v, workerOrigin, true); } catch { return v; }
+	if (clean.startsWith(workerOrigin + '/') && isProxiedPath(clean.slice(workerOrigin.length))) {
+		try {
+			const norm = normalizeProxiedUrl(clean, workerOrigin, true);
+			if (norm) return norm;
+		} catch { return v; }
 	}
 	try {
 		const abs = new URL(v, baseUrl);
@@ -283,13 +302,14 @@ function rewriteUrl(value, baseUrl, workerOrigin, resolveEmptyOrFragment = false
 			return v;
 		}
 		if (isWorkerHost(abs, workerOrigin)) {
-			const hasOrigin = /^(?:[a-z][a-z0-9+.-]*:[\/\\]*|[\/\\]{2,})/i.test(v);
+			const hasOrigin = /^(?:[a-z][a-z0-9+.-]*:[\/\\]*|[\/\\]{2,})/i.test(clean);
 			const rawSelfPath = hasOrigin
-				? v.replace(/^(?:[a-z][a-z0-9+.-]*:[\/\\]*|[\/\\]{2,})[^\/\\?#]*/i, '').replace(/\\/g, '/')
+				? clean.replace(/^(?:[a-z][a-z0-9+.-]*:[\/\\]*|[\/\\]{2,})[^\/\\?#]*/i, '').replace(/\\/g, '/')
 				: '';
 			// 已代理（同源主机且路径是编码后的目标 URL）
-			if (isProxiedPath(abs.pathname) || isProxiedPath(rawSelfPath)) {
-				return hasOrigin ? normalizeProxiedUrl(v, workerOrigin, true, abs) : abs.pathname + urlSuffix(abs);
+			if (hasOrigin ? isProxiedPath(rawSelfPath) : isProxiedPath(abs.pathname)) {
+				const norm = hasOrigin ? normalizeProxiedUrl(clean, workerOrigin, true, abs) : abs.pathname + urlSuffix(abs);
+				if (norm) return norm;
 			}
 			// 落到代理域自身的非代理路径：回退按目标基地址解析，避免触发自代理拦截
 			const rebound = new URL(new URL(baseUrl).origin + abs.pathname + urlSuffix(abs));
@@ -1190,10 +1210,13 @@ function base(){
   return target;
 }
 function normProxied(raw,keepOrigin,parsed){
-  var pu=parsed||new URL(raw,WO);
+  var clean=raw.replace(/[\\t\\r\\n]/g,'');
+  var pu=parsed||new URL(clean,WO);
   var isWs=pu.protocol==='ws:'||pu.protocol==='wss:';
-  var cut=raw.search(/[?#]/);
-  var rawPath=(cut<0?raw:raw.slice(0,cut)).replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
+  var cut=clean.search(/[?#]/);
+  var rawPath=(cut<0?clean:clean.slice(0,cut)).replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
+  var tu=decodeProxiedTarget(rawPath,cut<0?'':clean.slice(cut));
+  if(!tu)return null;
   if(!/\\/(?:\\.|%2e){2}(?:\\/|$)/i.test(rawPath)&&isProxiedPath(pu.pathname)){
     if(!keepOrigin)return pu.pathname+urlSuffix(pu);
     if(isWs){
@@ -1203,16 +1226,6 @@ function normProxied(raw,keepOrigin,parsed){
     }
     return WO+pu.pathname+urlSuffix(pu);
   }
-  var suffix=cut<0?'':raw.slice(cut);
-  var dec=decodeProxyPath(rawPath);
-  if(!dec)return keepOrigin?WO+pu.pathname+urlSuffix(pu):pu.pathname+urlSuffix(pu);
-  var hCut=suffix.indexOf('#');
-  var q=hCut<0?suffix:suffix.slice(0,hCut);
-  var h=hCut<0?'':suffix.slice(hCut);
-  var baseDec=dec.split('#',1)[0];
-  var tu=new URL(baseDec+(q?(baseDec.indexOf('?')>=0?'&':'?')+q.slice(1):'')+h);
-  var th=tu.hostname.toLowerCase().replace(/\\.+$/,'');
-  if(th){try{tu.hostname=th;}catch(e){}}
   var prefix=keepOrigin?(isWs?pu.protocol+'//'+(location.host||WOU.host):WO):'';
   return prefix+encodeProxyPath(tu);
 }
@@ -1221,17 +1234,21 @@ function rp(v){
   if(v instanceof URL)return rp(v.href);
   var s=trimUrlSpace(String(v));
   if(!s||SKIP_RE.test(s))return s;
-  if(isProxiedPath(s)){try{return normProxied(s,false);}catch(e){return s;}}
+  var clean=s.replace(/[\\t\\r\\n]/g,'');
+  if(isProxiedPath(clean)){try{var np=normProxied(clean,false);if(np)return np;}catch(e){return s;}}
   var forcedWs='';
   var b;try{b=base();}catch(e){return s;}
   try{
-    if(s===WO)s='/';
+    if(clean===WO)s='/';
     else{
       /* 与服务端一致：先按文档基址解析，再判断是否落回代理域；反斜线或省略斜线的写法同样指向代理自身 */
       var pu=new URL(s,b);
       if((pu.protocol==='http:'||pu.protocol==='https:'||pu.protocol==='ws:'||pu.protocol==='wss:')&&isSelfHost(pu)){
-        var rawSelf=s.replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
-        if(isProxiedPath(pu.pathname)||isProxiedPath(rawSelf))return normProxied(s,true,pu);
+        var rawSelf=clean.replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
+        if(isProxiedPath(rawSelf)){
+          var selfNorm=normProxied(clean,true,pu);
+          if(selfNorm)return selfNorm;
+        }
         if(pu.protocol==='ws:'||pu.protocol==='wss:')forcedWs=pu.protocol;
         // 用完整来源拼接：已解析路径开头的双斜线不是新的主机名。
         s=new URL(b).origin+pu.pathname+urlSuffix(pu);
@@ -1239,10 +1256,9 @@ function rp(v){
     }
   }catch(e){}
   var u;try{u=new URL(s,b);}catch(e){return s;}
-  if(u.origin===WO&&isProxiedPath(u.pathname))return u.href;
   var p=forcedWs?(u.protocol==='http:'?'ws:':'wss:'):u.protocol;
   if(p!=='http:'&&p!=='https:'&&p!=='ws:'&&p!=='wss:')return s;
-  var uh=u.hostname.toLowerCase().replace(/\\.+$/,'');
+  var uh=normalizeHostname(u.hostname);
   if(uh){try{u.hostname=uh;}catch(e){}}
   return WO+encodeProxyPath(u,p);
 }
@@ -2512,12 +2528,22 @@ return parse;
 
 /** HTML 的 URL-like module specifier：只有 /、./、../ 开头才带基址解析。 */
 function rewriteModuleSpecifier(specifier, baseUrl, workerOrigin) {
+	const clean = trimUrlSpace(String(specifier)).replace(/[\t\r\n]/g, '');
 	// 为保持幂等，已是代理路径的说明符不能按目标站点路径再次包装。
-	if (isProxiedPath(specifier)) return rewriteUrl(specifier, baseUrl, workerOrigin);
+	if (isProxiedPath(clean)) return rewriteUrl(specifier, baseUrl, workerOrigin);
 	try {
-		const resolved = /^(?:\/|\.\.?\/)/.test(specifier)
-			? new URL(specifier, baseUrl) : new URL(specifier);
+		const isRel = /^(?:\/|\.\.?\/)/.test(specifier);
+		const resolved = isRel ? new URL(specifier, baseUrl) : new URL(specifier);
 		if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return specifier;
+		if (isWorkerHost(resolved, workerOrigin)) {
+			const rawSelfPath = clean
+				.replace(/^(?:[a-z][a-z0-9+.-]*:[\/\\]*|[\/\\]{2,})[^\/\\?#]*/i, '')
+				.replace(/\\/g, '/');
+			if (isProxiedPath(rawSelfPath)) {
+				const norm = normalizeProxiedUrl(clean, workerOrigin, true, resolved);
+				if (norm) return norm;
+			}
+		}
 		return rewriteUrl(resolved.href, baseUrl, workerOrigin);
 	} catch {
 		// 裸说明符和无法解析的 URL 交给浏览器及 import map 原样处理。
@@ -3824,14 +3850,15 @@ ${browserPathHelpers()}
   });
   form.addEventListener('submit',function(e){
     e.preventDefault();
-    var v=input.value.trim();
-    var selfH=location.hostname.toLowerCase().replace(/\\.+$/,'');
-    if(/^(?:https?:)?\\/\\//i.test(v)){
+    var v=input.value.trim().replace(/[\\t\\r\\n]/g,'');
+    var selfH=normalizeHostname(location.hostname);
+    if(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})/i.test(v)){
       try{
         var u0=new URL(v,location.href);
-        if(u0.hostname.toLowerCase().replace(/\\.+$/,'')===selfH&&u0.port===location.port&&
-           isProxiedPath(u0.pathname)){
-          v=u0.pathname+urlSuffix(u0);
+        var rawSelf=v.replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
+        if(normalizeHostname(u0.hostname)===selfH&&u0.port===location.port&&
+           isProxiedPath(rawSelf)){
+          v=rawSelf+urlSuffix(u0);
         }
       }catch(_){}
     }

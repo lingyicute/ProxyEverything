@@ -159,6 +159,7 @@ test('homepage submit preserves percent-encoded plain URLs and rejects ws://', (
 	assert.equal(submit('https://en.wikipedia.org/wiki/C%23').href, '/~https%3A%2F%2Fen.wikipedia.org/wiki/C%23');
 	assert.equal(submit('https://example.com/files/a%2Fb?x=1').href, '/~https%3A%2F%2Fexample.com/files/a%2Fb?x=1');
 	assert.equal(submit(origin + '/https%3A%2F%2Fen.wikipedia.org/wiki/C%2523').href, '/~https%3A%2F%2Fen.wikipedia.org/wiki/C%23');
+	assert.equal(submit(origin + '/~https%3A%2F%2Fexample.com/../other.example/secret').href, '/~https%3A%2F%2Fexample.com/other.example/secret');
 	const wsRes = submit('ws://example.com/ws');
 	assert.equal(wsRes.href, origin + '/');
 	assert.equal(wsRes.snack, '仅支持 http:// 或 https:// 网址');
@@ -560,6 +561,23 @@ test('dot segments in already-proxied URLs stay clamped within their target orig
 		rewriteUrl('https://proxy.example/~https%3A%2F%2Fexample.com/../../other.example/secret', base, origin),
 		'https://proxy.example/~https%3A%2F%2Fexample.com/other.example/secret'
 	);
+	assert.equal(
+		rewriteUrl('/~https%3A%2F%2Fexample.com/.\t./~https%3A%2F%2Fother.example/secret', base, origin),
+		'/~https%3A%2F%2Fexample.com/~https%3A%2F%2Fother.example/secret'
+	);
+	assert.equal(
+		rewriteUrl('/~\thttps%3A%2F%2Fexample.com/../~https%3A%2F%2Fother.example/secret', base, origin),
+		'/~https%3A%2F%2Fexample.com/~https%3A%2F%2Fother.example/secret'
+	);
+	for (const input of [
+		'https://proxy.example/foo/../~https%3A%2F%2Fother.example/secret',
+		'https://proxy.example/./~https%3A%2F%2Fother.example/secret',
+		'/~https%3A%2F%2F/../~https%3A%2F%2Fother.example/secret',
+		'/~https%3A%2F%2F[invalid]/../~https%3A%2F%2Fother.example/secret',
+		'https://proxy.example/~https%3A%2F%2F[invalid]/../~https%3A%2F%2Fother.example/secret',
+	]) {
+		assert.equal(rewriteUrl(input, base, origin), 'https://proxy.example/~https%3A%2F%2Fexample.com/~https%3A%2F%2Fother.example/secret', input);
+	}
 	for (const input of [
 		'//proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
 		'/\\proxy.example/~https%3A%2F%2Fcdn.example/asset.js',
@@ -567,6 +585,7 @@ test('dot segments in already-proxied URLs stay clamped within their target orig
 		'\\\\proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
 		'https:\\\\proxy.example\\~https%3A%2F%2Fcdn.example\\..\\asset.js',
 		'http:proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
+		'ht\ttps://proxy.example/~\thttps%3A%2F%2Fcdn.example/.\n./asset.js',
 	]) {
 		assert.equal(rewriteUrl(input, base, origin), 'https://proxy.example/~https%3A%2F%2Fcdn.example/asset.js', input);
 	}

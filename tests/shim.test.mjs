@@ -71,8 +71,17 @@ test('shim: every spelling of a proxy-host URL is rebound to the target like on 
 		'\\\\proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
 		'https:\\\\proxy.example\\~https%3A%2F%2Fcdn.example\\..\\asset.js',
 		'http:proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
+		'ht\ttps://proxy.example/~\thttps%3A%2F%2Fcdn.example/.\n./asset.js',
 	]) {
 		assert.equal(rp(input), cdnAsset, input);
+	}
+	for (const input of [
+		'https://proxy.example/foo/../~https%3A%2F%2Fother.example/secret',
+		'https://proxy.example/./~https%3A%2F%2Fother.example/secret',
+		'/~https%3A%2F%2F/../~https%3A%2F%2Fother.example/secret',
+		'/~https%3A%2F%2F[invalid]/../~https%3A%2F%2Fother.example/secret',
+	]) {
+		assert.equal(rp(input), proxy('/~https%3A%2F%2Fother.example/secret'), input);
 	}
 	assert.equal(rp('wss://proxy.example/live'), origin + '/~' + encodeURIComponent('wss://example.com') + '/live');
 	// 其它协议即使主机名相同也不是代理地址。
@@ -360,6 +369,8 @@ test('history state updates resolve empty URLs against base and block dot-segmen
 	assert.equal(calls[3], '/~https%3A%2F%2Fexample.com/~https%3A%2F%2Fother.example/inside');
 	ctx.history.pushState(null, '', '/~https%3A%2F%2Fexample.com/sub/%2e%2e/inside');
 	assert.equal(calls[4], '/~https%3A%2F%2Fexample.com/inside');
+	ctx.history.pushState(null, '', '/~https%3A%2F%2Fexample.com/.\t./~https%3A%2F%2Fother.example/inside');
+	assert.equal(calls[5], '/~https%3A%2F%2Fexample.com/~https%3A%2F%2Fother.example/inside');
 	assert.throws(() => ctx.history.pushState(null, '', '/~https%3A%2F%2Fother.example/x'), { name: 'SecurityError' });
 });
 
