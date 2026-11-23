@@ -397,14 +397,14 @@ function mapSrcset(s, rewrite) {
 		out += rewrite(s.slice(urlStart, end)) + s.slice(end, i);
 		if (end < i) continue; // 该候选项没有描述符，直接进入下一轮
 
-		// 4. 描述符段（括号内的逗号不算分隔符，兼容未来的描述符语法）
+		// 4. 描述符段（括号内的逗号不算分隔符；规范的 in parens 状态不嵌套，遇到第一个 ')' 即退出）
 		const descStart = i;
-		let depth = 0;
+		let inParens = false;
 		while (i < n) {
 			const ch = s[i];
-			if (ch === '(') depth++;
-			else if (ch === ')') { if (depth > 0) depth--; }
-			else if (ch === ',' && depth === 0) break;
+			if (inParens) { if (ch === ')') inParens = false; }
+			else if (ch === '(') inParens = true;
+			else if (ch === ',') break;
 			i++;
 		}
 		out += s.slice(descStart, i);

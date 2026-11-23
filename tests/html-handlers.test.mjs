@@ -136,6 +136,12 @@ test('srcset preserves internal commas, data URLs and candidate separators', () 
 	assert.equal(image.getAttribute('srcset'), `${proxy('/dir/first,a.png')} 1x, data:image/gif;base64,token 2x, ${proxy('/dir/last.png')},, `);
 });
 
+test('srcset descriptor parentheses do not nest, so a stray "(" cannot hide later candidates', () => {
+	const image = element('img', { srcset: 'a.png w((x) 1x, b.png 2x' });
+	collectHandlers().img[0].element(image);
+	assert.equal(image.getAttribute('srcset'), `${proxy('/dir/a.png')} w((x) 1x, ${proxy('/dir/b.png')} 2x`);
+});
+
 test('HTML image start tags are parsed as img and their sources stay proxied', () => {
 	const handlers = collectHandlers();
 	const el = element('image', { src: '/leak.png', srcset: 'a.png 1x, b.png 2x' });

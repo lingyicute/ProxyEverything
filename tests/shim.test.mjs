@@ -241,6 +241,13 @@ test('shim srcset uses the same URL boundaries and leaves data candidates alone'
 	assert.equal(image.getAttribute('srcset'), `${proxy('/dir/first,a.png')} 1x, data:image/gif;base64,token 2x, ${proxy('/dir/last.png')},, `);
 });
 
+test('shim srcset ends a parenthesised descriptor at the first closing parenthesis', () => {
+	const { ctx } = createBrowser();
+	const image = new ctx.Element('img');
+	image.setAttribute('srcset', 'a.png w((x) 1x, b.png 2x');
+	assert.equal(image.getAttribute('srcset'), `${proxy('/dir/a.png')} w((x) 1x, ${proxy('/dir/b.png')} 2x`);
+});
+
 test('document.cookie shares protected cookie names without accepting HTTP-only writes', () => {
 	const ns = '__pe_fixture_';
 	let last = '';
