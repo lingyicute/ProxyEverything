@@ -2148,8 +2148,10 @@ function bufferedTextHandler(rewrite, matches = () => true) {
 	};
 }
 
-function transformHtml(response, baseUrl, workerOrigin, ck) {
+function transformHtml(response, baseUrl, workerOrigin, ck, sourceCharset = null) {
 	const rewriter = new HTMLRewriter();
+	// 输出统一为 UTF-8。未声明编码的外部经典脚本原本按文档编码解码，透传时需要显式保留原编码。
+	const scriptCharset = sourceCharset && !isUtf8Charset(sourceCharset) ? sourceCharset : null;
 	const isXml = mimeType(response.headers.get('Content-Type')) === 'application/xhtml+xml';
 	const rawText = (text, transform) => isXml ? rewriteXmlText(text, transform) : transform(text);
 	let baseHref = baseUrl;
@@ -2262,6 +2264,11 @@ function transformHtml(response, baseUrl, workerOrigin, ck) {
 			element(el) {
 				// 内容被我们改写过的资源必须去掉 SRI，否则哈希校验失败被浏览器拦截
 				if (tag === 'script' || tag === 'link') el.removeAttribute('integrity');
+				// 改写后的脚本带 charset=UTF-8 响应头，优先于此属性；它只影响原样透传的脚本。
+				if (tag === 'script' && scriptCharset && el.namespaceURI === htmlNamespace &&
+					el.hasAttribute('src') && !el.hasAttribute('charset')) {
+					setHtmlAttribute(el, 'charset', scriptCharset, isXml);
+				}
 				for (const [attr, kind] of attrs) {
 					const v = getHtmlAttribute(el, attr, isXml);
 					if (v == null) continue;
@@ -3323,7 +3330,7 @@ Disallow: /
 				stripHopByHop(interim.headers);
 				stripTransformedHeaders(interim.headers);
 				interim.headers.set('Content-Type', mimeType(contentType) + '; charset=UTF-8');
-				return applyCommon(transformHtml(interim, baseUrl, workerOrigin, ck), request, ck);
+				return applyCommon(transformHtml(interim, baseUrl, workerOrigin, ck, sniffed.charset), request, ck);
 			}
 			return applyCommon(await transformText(upstream, baseUrl, workerOrigin, kind, request, charset), request, ck);
 		} catch {

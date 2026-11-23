@@ -17,6 +17,7 @@ Cookie 命名空间保留 `__Secure-`、`__Host-`、`__Http-` 和 `__Host-Http-`
 ## 改写边界
 
 - CSS、JavaScript、SVG 和 Web App Manifest 的正文缓冲上限为 2 MiB；HTML 流式处理，单个受改写的脚本或样式文本也有这个上限。多个相对 URL 可能继承同一个长基路径，因此缓冲文本和部分 URL 列表另有 4 Mi 个 UTF-16 码元的增长预算。超限时保留对应原文，不保证其中的 URL 会走代理。
+- 未声明编码（没有 BOM 或 HTTP charset）且不是合法 UTF-8 的 JavaScript 原样透传。HTML 从其它编码转为 UTF-8 时，会给未声明 `charset` 的外部脚本补上原文档编码，透传的经典脚本仍按原编码解码；脚本动态创建的 `<script>` 和 CSS 没有这个保障。
 - 流式 HTML 不会回溯已发出的内容；应把 `<base>` 放在依赖它的资源之前。XHTML 使用 HTMLRewriter，不是完整的 XML/DTD 解析器。
 - 浏览器 shim 只覆盖常见 API，不会执行或分析任意脚本来推断 URL，也不会递归改写 iframe 的 `srcdoc`。`location.href`、`location.assign()` 等脚本跳转无法包裹，只在支持 Navigation API 的浏览器中改道回代理；其它浏览器里指向绝对地址的跳转会离开代理。未改写的站内路径有时可凭代理页的 Referer 恢复，但缺少可靠 Referer 时不保证可用。上游 `no-transform`、附件和部分响应也不会改写正文。
 
