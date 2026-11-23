@@ -545,6 +545,18 @@ test('dot segments in already-proxied URLs stay clamped within their target orig
 		'/~https%3A%2F%2Fexample.com/other.example/secret?q=1#h'
 	);
 	assert.equal(
+		rewriteUrl('/~https%3A%2F%2Fexample.com/../~https%3A%2F%2Fother.example/secret', base, origin),
+		'/~https%3A%2F%2Fexample.com/~https%3A%2F%2Fother.example/secret'
+	);
+	assert.equal(
+		rewriteUrl('/~https%3A%2F%2Fexample.com/%2e%2e/other.example/secret', base, origin),
+		'/~https%3A%2F%2Fexample.com/other.example/secret'
+	);
+	assert.equal(
+		rewriteUrl('/https://example.com/../other.example/secret', base, origin),
+		'/~https%3A%2F%2Fexample.com/other.example/secret'
+	);
+	assert.equal(
 		rewriteUrl('https://proxy.example/~https%3A%2F%2Fexample.com/../../other.example/secret', base, origin),
 		'https://proxy.example/~https%3A%2F%2Fexample.com/other.example/secret'
 	);

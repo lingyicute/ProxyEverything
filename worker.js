@@ -244,9 +244,11 @@ function normalizeProxiedUrl(raw, workerOrigin, keepOrigin) {
 	const prefix = keepOrigin
 		? (u.protocol === 'ws:' || u.protocol === 'wss:' ? `${u.protocol}//${new URL(workerOrigin).host}` : workerOrigin)
 		: '';
-	if (isProxiedPath(u.pathname)) return `${prefix}${u.pathname}${urlSuffix(u)}`;
 	const cut = raw.search(/[?#]/);
 	const rawPath = (cut < 0 ? raw : raw.slice(0, cut)).replace(/^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/?#]*/i, '');
+	if (!/\/(?:\.|%2e){2}(?:\/|$)/i.test(rawPath) && isProxiedPath(u.pathname)) {
+		return `${prefix}${u.pathname}${urlSuffix(u)}`;
+	}
 	const suffix = cut < 0 ? '' : raw.slice(cut);
 	const decoded = decodeProxyPath(rawPath);
 	if (!decoded) return `${prefix}${u.pathname}${urlSuffix(u)}`;
@@ -1182,8 +1184,10 @@ function base(){
 function normProxied(raw,keepOrigin){
   var pu=new URL(raw,WO);
   var isWs=pu.protocol==='ws:'||pu.protocol==='wss:';
-  if(isProxiedPath(pu.pathname)){
-    if(!keepOrigin)return raw.indexOf('..')<0?raw:pu.pathname+urlSuffix(pu);
+  var cut=raw.search(/[?#]/);
+  var rawPath=(cut<0?raw:raw.slice(0,cut)).replace(/^(?:[a-z][a-z0-9+.-]*:)?\\/\\/[^/?#]*/i,'');
+  if(!/\\/(?:\\.|%2e){2}(?:\\/|$)/i.test(rawPath)&&isProxiedPath(pu.pathname)){
+    if(!keepOrigin)return pu.pathname+urlSuffix(pu);
     if(isWs){
       var canonH=location.hostname||WOU.hostname;
       if(canonH&&pu.hostname!==canonH)pu.hostname=canonH;
@@ -1191,8 +1195,6 @@ function normProxied(raw,keepOrigin){
     }
     return WO+pu.pathname+urlSuffix(pu);
   }
-  var cut=raw.search(/[?#]/);
-  var rawPath=(cut<0?raw:raw.slice(0,cut)).replace(/^(?:[a-z][a-z0-9+.-]*:)?\\/\\/[^/?#]*/i,'');
   var suffix=cut<0?'':raw.slice(cut);
   var dec=decodeProxyPath(rawPath);
   if(!dec)return keepOrigin?WO+pu.pathname+urlSuffix(pu):pu.pathname+urlSuffix(pu);

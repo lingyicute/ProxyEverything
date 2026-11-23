@@ -346,6 +346,10 @@ test('history state updates resolve empty URLs against base and block dot-segmen
 	assert.equal(calls[1], '/~https%3A%2F%2Fexample.com./sub/next');
 	ctx.history.pushState(null, '', '/~https%3A%2F%2Fexample.com/../other.example/inside');
 	assert.equal(calls[2], '/~https%3A%2F%2Fexample.com/other.example/inside');
+	ctx.history.pushState(null, '', '/~https%3A%2F%2Fexample.com/../~https%3A%2F%2Fother.example/inside');
+	assert.equal(calls[3], '/~https%3A%2F%2Fexample.com/~https%3A%2F%2Fother.example/inside');
+	ctx.history.pushState(null, '', '/~https%3A%2F%2Fexample.com/sub/%2e%2e/inside');
+	assert.equal(calls[4], '/~https%3A%2F%2Fexample.com/inside');
 	assert.throws(() => ctx.history.pushState(null, '', '/~https%3A%2F%2Fother.example/x'), { name: 'SecurityError' });
 });
 
