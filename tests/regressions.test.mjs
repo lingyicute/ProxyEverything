@@ -560,10 +560,16 @@ test('dot segments in already-proxied URLs stay clamped within their target orig
 		rewriteUrl('https://proxy.example/~https%3A%2F%2Fexample.com/../../other.example/secret', base, origin),
 		'https://proxy.example/~https%3A%2F%2Fexample.com/other.example/secret'
 	);
-	assert.equal(
-		rewriteUrl('//proxy.example/~https%3A%2F%2Fcdn.example/../asset.js', base, origin),
-		'https://proxy.example/~https%3A%2F%2Fcdn.example/asset.js'
-	);
+	for (const input of [
+		'//proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
+		'/\\proxy.example/~https%3A%2F%2Fcdn.example/asset.js',
+		'/\\proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
+		'\\\\proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
+		'https:\\\\proxy.example\\~https%3A%2F%2Fcdn.example\\..\\asset.js',
+		'http:proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
+	]) {
+		assert.equal(rewriteUrl(input, base, origin), 'https://proxy.example/~https%3A%2F%2Fcdn.example/asset.js', input);
+	}
 });
 
 test('HTML meta charset prescan follows WHATWG pragma and attribute precedence rules', async () => {

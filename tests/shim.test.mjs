@@ -64,6 +64,16 @@ test('shim: every spelling of a proxy-host URL is rebound to the target like on 
 	]) {
 		assert.equal(rp(input), proxy('/api?x=1'), input);
 	}
+	const cdnAsset = origin + '/~' + encodeURIComponent('https://cdn.example') + '/asset.js';
+	for (const input of [
+		'/\\proxy.example/~https%3A%2F%2Fcdn.example/asset.js',
+		'/\\proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
+		'\\\\proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
+		'https:\\\\proxy.example\\~https%3A%2F%2Fcdn.example\\..\\asset.js',
+		'http:proxy.example/~https%3A%2F%2Fcdn.example/../asset.js',
+	]) {
+		assert.equal(rp(input), cdnAsset, input);
+	}
 	assert.equal(rp('wss://proxy.example/live'), origin + '/~' + encodeURIComponent('wss://example.com') + '/live');
 	// 其它协议即使主机名相同也不是代理地址。
 	assert.equal(rp('ftp://proxy.example/file'), 'ftp://proxy.example/file');
