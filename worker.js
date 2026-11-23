@@ -30,6 +30,10 @@ const STRIP_RESPONSE_HEADERS = [
 	'cross-origin-opener-policy',
 	'cross-origin-embedder-policy',
 	'cross-origin-resource-policy',
+	'cross-origin-opener-policy-report-only',
+	'cross-origin-embedder-policy-report-only',
+	'document-isolation-policy',        // 与 COEP 同样要求子资源带 CORP/CORS；代理已剥除 CORP，保留会拦截全部跨源子资源
+	'document-isolation-policy-report-only',
 	'link',               // preload/preconnect 指向原站，无意义
 	'alt-svc',
 	'report-to',

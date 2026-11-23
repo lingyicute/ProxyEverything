@@ -72,6 +72,19 @@ test('integrity and legacy feature policies do not block rewritten pages', async
 	for (const name of Object.keys(headers).slice(1)) assert.equal(response.headers.get(name), null, name);
 });
 
+test('document isolation and report-only isolation headers are not forwarded', async () => {
+	const headers = {
+		'content-type': 'image/png',
+		'document-isolation-policy': 'isolate-and-require-corp',
+		'document-isolation-policy-report-only': 'isolate-and-require-corp',
+		'cross-origin-opener-policy-report-only': 'same-origin',
+		'cross-origin-embedder-policy-report-only': 'require-corp',
+	};
+	const response = await fetchThrough('https://example.com/a.png', headers);
+	for (const name of Object.keys(headers).slice(1)) assert.equal(response.headers.get(name), null, name);
+	assert.equal(response.headers.get('content-type'), 'image/png');
+});
+
 test('only exact supported media types are transformed; attachments and no-transform stay untouched', async () => {
 	const page = 'https://example.com/dir/page';
 	const original = 'a{background:url(untouched.png)}';
