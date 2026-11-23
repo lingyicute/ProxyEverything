@@ -959,7 +959,11 @@ function xmlDeclaredCharset(text) {
 	const m = /^<\?xml[ \t\r\n][^?]*\?>/.exec(text);
 	if (!m) return null;
 	for (const [, , name, , double, single] of m[0].matchAll(XML_ATTR)) {
-		if (name === 'encoding') return normalizeCharsetLabel(double ?? single);
+		if (name !== 'encoding') continue;
+		// 声明能按 ASCII 读出，正文就不可能是 UTF-16（真正的 UTF-16 已由 BOM 或字节签名识别）；
+		// 与浏览器一致，把这种错误声明当作 UTF-8，而不是把整篇按 UTF-16 解成乱码。
+		const encoding = normalizeCharsetLabel(double ?? single);
+		return encoding && /^utf-16(?:le|be)$/.test(encoding) ? 'utf-8' : encoding;
 	}
 	return null;
 }

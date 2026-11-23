@@ -601,3 +601,16 @@ test('standalone SVG sniffs XML encoding declarations beyond 256 bytes', () => {
 	const prolog = `<?xml version="1.0"${' '.repeat(300)}encoding="windows-1252"?><svg>Café</svg>`;
 	assert.equal(sniffTextCharset(Buffer.from(prolog, 'latin1'), 'svg', null), 'windows-1252');
 });
+
+test('UTF-16 XML declarations in ASCII-compatible bytes fall back to UTF-8', async () => {
+	for (const label of ['UTF-16', 'utf-16le', 'UTF-16BE']) {
+		const xml = `<?xml version="1.0" encoding="${label}"?><svg>Café</svg>`;
+		assert.equal(sniffTextCharset(Buffer.from(xml), 'svg', null), 'utf-8', label);
+		const sniffed = await sniffHtmlCharset(new Response(xml.replace('svg', 'html')).body, null, true);
+		assert.equal(sniffed.charset, 'utf-8', label);
+		await sniffed.body.cancel();
+	}
+	// Real UTF-16 documents are still recognized by their byte signature.
+	const utf16 = Buffer.from('<?xml version="1.0" encoding="UTF-16"?><svg/>', 'utf16le');
+	assert.equal(sniffTextCharset(utf16, 'svg', null), 'utf-16le');
+});
