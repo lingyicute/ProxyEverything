@@ -1348,7 +1348,7 @@ function isProxyRequestUrl(value){
 function rwInit(init,stripIntegrity){
   if(init!=null&&typeof init!=='object'&&typeof init!=='function')return init;
   var ref=init?.referrer;
-  var next=ref!==undefined&&ref!==''&&ref!=='about:client'?rwNavigation(String(ref),false):ref;
+  var next=ref!==undefined&&ref!==''&&ref!=='about:client'?rwNavigation(String(ref),true):ref;
   if(next===ref&&!stripIntegrity)return init;
   // Fetch reads RequestInit as a dictionary, including inherited and non-enumerable
   // properties. Do not copy it with Object.assign or mutate the caller's object.

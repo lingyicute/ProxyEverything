@@ -456,6 +456,10 @@ test('shim coerces non-string URL objects, WebSocket empty base, and null attrib
 	ctx.fetch('#frag', { referrer: '#ref' });
 	assert.equal(fetchedUrl, proxy('/sub/#frag'));
 	assert.equal(fetchedInit.referrer, proxy('/sub/#ref'));
+	ctx.fetch('/api', { referrer: '   ' });
+	assert.equal(fetchedInit.referrer, proxy('/sub/'));
+	ctx.fetch('/api', { referrer: '' });
+	assert.equal(fetchedInit.referrer, '');
 	ctx.navigator.sendBeacon(urlLike);
 	assert.equal(beaconUrl, proxy('/api/v1'));
 	ctx.location.assign('#section');
