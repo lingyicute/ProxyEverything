@@ -731,12 +731,26 @@ function originalCookieName(stored, ns) {
 	return reservedCookiePrefix(name) === prefix ? name : null;
 }
 
+/** Domain 必须匹配原始目标主机，不能因移除 Domain 而接受原本会被浏览器拒绝的 Cookie。 */
+function cookieDomainMatches(domain, targetUrl) {
+	if (!targetUrl) return false;
+	let value = String(domain).replace(/^\./, '');
+	if (!value || value.endsWith('.') || value.includes('..') || !/^[a-z0-9_\-.\u0080-\u{10ffff}]+$/iu.test(value)) return false;
+	try {
+		const host = normalizeHostname(new URL(targetUrl).hostname);
+		const parsed = new URL('https://' + value + '/').hostname;
+		// 禁止单标签后缀和规范化后仍不合法的名称；完整公共后缀表不在 Worker 中。
+		if (!parsed || parsed.endsWith('.') || parsed.startsWith('.') || parsed.includes('..') || !parsed.includes('.')) return false;
+		return host === parsed || host.endsWith('.' + parsed);
+	} catch { return false; }
+}
+
 /**
  * 改写上游 Set-Cookie：加命名空间前缀、强制 Path=/、去掉 Domain，
  * 确保 Secure / SameSite=None / Partitioned 不会被降级。
  * 返回 null 表示这条 cookie 无效、应丢弃。
  */
-function scopeSetCookie(c, ns, workerIsHttps, fromScript = false) {
+function scopeSetCookie(c, ns, workerIsHttps, fromScript = false, targetUrl = null) {
 	const rawCookie = String(c);
 	// RFC 6265bis 拒绝除水平制表符外的控制字符（含 NUL/CR/LF/DEL）。
 	if (/[\x00-\x08\x0a-\x1f\x7f]/.test(rawCookie)) return null;
@@ -750,7 +764,7 @@ function scopeSetCookie(c, ns, workerIsHttps, fromScript = false) {
 
 	const prefix = reservedCookiePrefix(name);
 	const out = [`${prefix}${ns}${name.slice(prefix.length)}=${value}`];
-	let path = null, hasDomain = false, hasHttpOnly = false;
+	let path = null, hasDomain = false, domain = null, hasHttpOnly = false;
 	let sameSite = null;
 	let hasSecure = false;
 	let hasPartitioned = false;
@@ -760,7 +774,12 @@ function scopeSetCookie(c, ns, workerIsHttps, fromScript = false) {
 		if (!part) continue;
 		const split = part.indexOf('=');
 		const attr = part.slice(0, split < 0 ? undefined : split).trim().toLowerCase();
-		if (attr === 'domain') { hasDomain = true; continue; }
+		if (attr === 'domain') {
+			hasDomain = true;
+			const value = split < 0 ? '' : part.slice(split + 1).trim();
+			if (value) domain = value; // 空属性被忽略；多个有效属性以最后一个为准。
+			continue;
+		}
 		if (attr === 'path') { path = split < 0 ? '' : part.slice(split + 1).trim(); continue; }
 		if (attr === 'httponly') {
 			if (fromScript) return null;
@@ -787,6 +806,7 @@ function scopeSetCookie(c, ns, workerIsHttps, fromScript = false) {
 		out.push(part);
 	}
 
+	if (domain !== null && !cookieDomainMatches(domain, targetUrl)) return null;
 	// 必须由上游或页面原本声明 Secure；补写会接受浏览器本应拒绝的 Cookie。
 	if (!hasSecure && (prefix || hasPartitioned || sameSite?.toLowerCase() === 'none')) return null;
 	if (/^__host-/i.test(prefix) && (hasDomain || path !== '/')) return null;
@@ -827,14 +847,14 @@ function scopeRequestCookie(header, ns) {
 }
 
 /** 就地重写 Headers 上的全部 Set-Cookie */
-function rescopeSetCookies(headers, ns, workerIsHttps) {
+function rescopeSetCookies(headers, ns, workerIsHttps, targetUrl) {
 	// Workers 的标准 API 可能尚不可用，但 getAll('Set-Cookie') 保留独立的字段。
 	// 不读合并后的 get()：Expires 自身含逗号，无法安全地靠分隔符还原。
 	const list = typeof headers.getSetCookie === 'function' ? headers.getSetCookie()
 		: typeof headers.getAll === 'function' ? headers.getAll('Set-Cookie') : [];
 	headers.delete('Set-Cookie');
 	for (const c of list) {
-		const scoped = scopeSetCookie(c, ns, workerIsHttps);
+		const scoped = scopeSetCookie(c, ns, workerIsHttps, false, targetUrl);
 		if (scoped) headers.append('Set-Cookie', scoped);
 	}
 }
@@ -1700,6 +1720,7 @@ try{
 if(CK){
   ${reservedCookiePrefix.toString()}
   ${originalCookieName.toString()}
+  ${cookieDomainMatches.toString()}
   var scopeCookie=${scopeSetCookie.toString()};
   var CD=Object.getOwnPropertyDescriptor(Document.prototype,'cookie')||
          Object.getOwnPropertyDescriptor(HTMLDocument.prototype,'cookie');
@@ -1719,7 +1740,8 @@ if(CK){
         return out.join('; ');
       },
       set:function(v){
-        var scoped=scopeCookie(v,CK,location.protocol==='https:'&&new URL(currentTarget()).protocol==='https:',true);
+        var cookieTarget=currentTarget();
+        var scoped=scopeCookie(v,CK,location.protocol==='https:'&&new URL(cookieTarget).protocol==='https:',true,cookieTarget);
         if(scoped===null)return;
         return CD.set.call(this,scoped);
       }
@@ -3232,7 +3254,7 @@ async function handleWebSocket(request, targetUrl, ck, workerOrigin, env) {
 	for (const name of [...responseHeaders.keys()]) {
 		if (!['sec-websocket-protocol', 'set-cookie'].includes(name.toLowerCase())) responseHeaders.delete(name);
 	}
-	if (ck) rescopeSetCookies(responseHeaders, ck.ns, ck.isHttps);
+	if (ck) rescopeSetCookies(responseHeaders, ck.ns, ck.isHttps, ck.targetUrl);
 	return new Response(null, { status: 101, webSocket: pair[1], headers: responseHeaders });
 }
 
@@ -3329,6 +3351,7 @@ Disallow: /
 		// 本请求的 cookie 来源作用域（WebSocket 与其对应 HTTP 来源共享）
 		const ck = {
 			ns: cookieNamespace(targetUrl),
+			targetUrl: targetUrl.href,
 			varyOnReferer: usesRefererRoute,
 			isHttps: url.protocol === 'https:' && ['https:', 'wss:'].includes(targetUrl.protocol),
 		};
@@ -3480,7 +3503,7 @@ function applyCommon(resp, request, ck) {
 	}
 	applyCors(resp.headers, request);
 	applyCachePolicy(resp, request, ck);
-	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps);
+	if (ck) rescopeSetCookies(resp.headers, ck.ns, ck.isHttps, ck.targetUrl);
 	return resp;
 }
 
