@@ -732,3 +732,13 @@ test('refresh directives keep original text when the URL does not change', () =>
 		assert.equal(rewriteRefreshContent(value, base, origin), value);
 	}
 });
+
+test('decodeProxiedTarget rejects leading or consecutive dot hostnames', () => {
+	for (const host of ['.example.com', 'example..com', 'example.com..']) {
+		const path = '/~' + encodeURIComponent('https://' + host) + '/page';
+		assert.equal(decodeProxiedTarget(path), null, host);
+		assert.equal(resolveTargetBaseUrl(path, base, origin, true), 'https://example.com' + path, host);
+	}
+	const fqdn = '/~' + encodeURIComponent('https://example.com.') + '/page';
+	assert.equal(decodeProxiedTarget(fqdn)?.href, 'https://example.com/page');
+});

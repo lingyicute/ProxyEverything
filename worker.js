@@ -247,7 +247,9 @@ function decodeProxiedTarget(rawPath, suffix = '') {
 		const extraQuery = query ? (baseTarget.includes('?') ? (query.length > 1 ? sep + query.slice(1) : '') : query) : '';
 		const target = new URL(baseTarget + extraQuery + hash);
 		if (!['http:', 'https:', 'ws:', 'wss:'].includes(target.protocol) || target.username || target.password) return null;
-		const host = normalizeHostname(target.hostname);
+		const rawHost = target.hostname;
+		if (!rawHost || rawHost.startsWith('.') || rawHost.includes('..')) return null;
+		const host = normalizeHostname(rawHost);
 		if (!host) return null;
 		target.hostname = host;
 		return target;
