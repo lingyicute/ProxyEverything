@@ -184,6 +184,9 @@ test('HTML base unwraps already-proxied and proxy-host URLs to their target base
 		['/~https%3A%2F%2Fother.example/sub/', 'https://other.example/sub/', origin + '/~' + encodeURIComponent('https://other.example') + '/sub/rel.html'],
 		[proxy('/sub/'), 'https://example.com/sub/', proxy('/sub/rel.html')],
 		[origin + '/sub/', 'https://example.com/sub/', proxy('/sub/rel.html')],
+		[origin + '/~https%3A%2F%2Fother.example/sub/?v=1#h', 'https://other.example/sub/?v=1#h', origin + '/~' + encodeURIComponent('https://other.example') + '/sub/rel.html'],
+		[origin + '/~https%3A%2F%2Fother.example?v=1', 'https://other.example/?v=1', origin + '/~' + encodeURIComponent('https://other.example') + '/rel.html'],
+		['https:\\\\proxy.example\\~https%3A%2F%2Fother.example\\sub\\?k=a\\b', 'https://other.example/sub/?k=a\\b', origin + '/~' + encodeURIComponent('https://other.example') + '/sub/rel.html'],
 	]) {
 		const handlers = collectHandlers();
 		const baseEl = element('base', { href });

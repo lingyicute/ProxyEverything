@@ -20,6 +20,11 @@ test('SVG xml:base scopes references and restores the parent base after closing 
 	assert.equal(rewrite(expected), expected);
 	const proxiedBase = `<svg xml:base="${proxy('/assets/')}"><g xml:base="/sub/"><image href="one.png"/></g></svg>`;
 	assert.equal(rewrite(proxiedBase), `<svg xml:base="${proxy('/assets/')}"><g xml:base="${proxy('/sub/')}"><image href="${proxy('/sub/one.png')}"/></g></svg>`);
+	const other = origin + '/~' + encodeURIComponent('https://other.example');
+	assert.equal(rewrite(`<svg xml:base="${other}/dir/?v=1"><image href="a.png"/></svg>`),
+		`<svg xml:base="${other}/dir/?v=1"><image href="${other}/dir/a.png"/></svg>`);
+	assert.equal(rewrite(`<svg xml:base="${other}?v=1"><image href="a.png"/></svg>`),
+		`<svg xml:base="${other}/?v=1"><image href="${other}/a.png"/></svg>`);
 });
 
 test('SVG xml:base on a self-closing element cannot affect its siblings', () => {

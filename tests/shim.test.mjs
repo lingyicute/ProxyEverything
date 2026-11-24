@@ -401,6 +401,8 @@ test('shim ignores foreign base elements and freezes at the first HTML base with
 		['/~https%3A%2F%2Fother.example/sub/', 'https://other.example/sub/', origin + '/~' + encodeURIComponent('https://other.example') + '/api'],
 		[proxy('/sub/'), 'https://example.com/sub/', proxy('/api')],
 		[origin + '/sub/', 'https://example.com/sub/', proxy('/api')],
+		[origin + '/~https%3A%2F%2Fother.example/sub/?v=1#h', 'https://other.example/sub/?v=1#h', origin + '/~' + encodeURIComponent('https://other.example') + '/api'],
+		[origin + '/~https%3A%2F%2Fother.example?v=1', 'https://other.example/?v=1', origin + '/~' + encodeURIComponent('https://other.example') + '/api'],
 	]) {
 		secondBase.setAttribute('href', href);
 		assert.equal(secondBase.getAttribute('data-pe-base'), expectedBase, href);

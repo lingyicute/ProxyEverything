@@ -294,11 +294,11 @@ function resolveTargetBaseUrl(raw, fallbackBase, workerOrigin, httpOnly = false)
 		const u = new URL(raw, fallbackBase);
 		if (!allow(u)) return '';
 		if (isWorkerHost(u, workerOrigin)) {
-			const rawSelf = clean
+			const cut = clean.search(/[?#]/);
+			const rawSelf = (cut < 0 ? clean : clean.slice(0, cut))
 				.replace(/^(?:[a-z][a-z0-9+.-]*:[\/\\]*|[\/\\]{2,})[^\/\\?#]*/i, '')
 				.replace(/\\/g, '/');
 			if (isProxiedPath(rawSelf)) {
-				const cut = clean.search(/[?#]/);
 				const target = decodeProxiedTarget(rawSelf, cut < 0 ? '' : clean.slice(cut));
 				if (target && allow(target)) return target.href;
 			}
@@ -1241,9 +1241,9 @@ function resolveBase(h,target){
     var u=new URL(h,target);
     if(u.protocol!=='http:'&&u.protocol!=='https:')return '';
     if(isSelfHost(u)){
-      var rawSelf=clean.replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
+      var cut1=clean.search(/[?#]/);
+      var rawSelf=(cut1<0?clean:clean.slice(0,cut1)).replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
       if(isProxiedPath(rawSelf)){
-        var cut1=clean.search(/[?#]/);
         var t1=decodeProxiedTarget(rawSelf,cut1<0?'':clean.slice(cut1));
         if(t1&&(t1.protocol==='http:'||t1.protocol==='https:'))return t1.href;
       }
