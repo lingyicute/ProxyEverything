@@ -344,3 +344,14 @@ test('SameSite=None and Partitioned cookies require an upstream Secure attribute
 	assert.match(values[1], /_part=4; Secure; Partitioned;/);
 	assert.match(values[2], /_lax=5; SameSite=Lax;/);
 });
+
+test('authenticated redirects reject opaque non-HTTP schemes carrying the same host', async t => {
+	const env = { ALLOWED_TARGET_ORIGINS: 'https://example.com' };
+	for (const location of ['blob:https://example.com/id', 'mailto:example.com/path']) {
+		t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 302, headers: { location } }));
+		const r = await worker.fetch(new Request(proxy('https://example.com/start'), {
+			headers: { authorization: 'Bearer tok' },
+		}), env);
+		assert.equal(r.status, 502, location);
+	}
+});

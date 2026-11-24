@@ -3374,7 +3374,11 @@ Disallow: /
 			// 浏览器只看到同一个代理源，不会像真正的跨源重定向那样删除 Authorization。
 			const nextLocation = resp.headers.get('Location');
 			if (nextLocation && fwdHeaders.has('Authorization')) {
-				const next = parseTarget(new URL(nextLocation, workerOrigin));
+				let next = null;
+				try {
+					const nextUrl = new URL(nextLocation, workerOrigin);
+					if (nextUrl.origin === workerOrigin) next = parseTarget(nextUrl);
+				} catch {}
 				if (!next || next.protocol !== targetUrl.protocol || next.origin !== targetUrl.origin) {
 					return new Response('不能跨目标来源重定向带 Authorization 的请求', {
 						status: 502, headers: { 'Cache-Control': 'no-store' },
