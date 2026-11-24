@@ -73,6 +73,14 @@ test('meta refresh: preserves trailing quotes on unquoted URLs and trims quoted 
 		rewriteRefreshContent("0; url='https://example.com/a", base, origin),
 		`0; url=${proxy('https://example.com/a')}`
 	);
+	assert.equal(rewriteRefreshContent('5.2.3; url=https://example.com/next', base, origin),
+		`5.2.3; url=${proxy('https://example.com/next')}`);
+	assert.equal(rewriteRefreshContent('.; url=https://example.com/next', base, origin),
+		`.; url=${proxy('https://example.com/next')}`);
+	assert.equal(rewriteRefreshContent('5abc; url=https://example.com/next', base, origin),
+		'5abc; url=https://example.com/next');
+	assert.equal(rewriteRefreshContent('0; url=#sec', base, origin), '0; url=#sec');
+	assert.equal(rewriteRefreshContent('0; url=  ', base, origin), '0; url=  ');
 });
 
 test('svg: preserves CDATA end-tags, comments, ]]> escapes, namespaces, and quoted script attrs', () => {

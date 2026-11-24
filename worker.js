@@ -666,23 +666,21 @@ function rewriteLazyValue(attr, value, baseUrl, workerOrigin) {
 	return urlLike ? rewriteUrl(value, baseUrl, workerOrigin) : value;
 }
 
-/** 重写 <meta http-equiv="refresh" content="0; url=...">（兼容省略 url= 的规范写法，避免误匹配查询串内 url= 或空 url= 回溯） */
+/** 按 HTML 规范重写 Refresh / meta refresh（支持多点延迟与省略 url= 的写法）。 */
 function rewriteRefreshContent(content, baseUrl, workerOrigin) {
-	const stripQuotes = (s) => {
-		const t = s.trim();
-		if (t[0] === "'" || t[0] === '"') {
-			const end = t.indexOf(t[0], 1);
-			return (end >= 0 ? t.slice(1, end) : t.slice(1)).trim();
-		}
-		return t;
-	};
-	return String(content).replace(
-		/^(\s*(?:\d+(?:\.\d*)?|\.\d+)(?:\s*[;,]\s*|\s+))(?:url\s*=\s*|(?!url\s*=))([\s\S]*)$/i,
-		(m, prefix, u) => {
-			const cleaned = stripQuotes(u);
-			return cleaned ? prefix + 'url=' + rewriteUrl(cleaned, baseUrl, workerOrigin) : m;
-		}
-	);
+	const raw = String(content);
+	const m = /^([ \t\r\n\f]*[0-9.]+(?:[ \t\r\n\f]*[;,][ \t\r\n\f]*|[ \t\r\n\f]+))([\s\S]*)$/.exec(raw);
+	if (!m || !m[2]) return raw;
+	const [, prefix, rest] = m;
+	const urlPrefix = /^url[ \t\r\n\f]*=[ \t\r\n\f]*/i.exec(rest);
+	const tail = urlPrefix ? rest.slice(urlPrefix[0].length) : rest;
+	let url = tail;
+	if (tail[0] === "'" || tail[0] === '"') {
+		const end = tail.indexOf(tail[0], 1);
+		url = end >= 0 ? tail.slice(1, end) : tail.slice(1);
+	}
+	const cleaned = trimUrlSpace(url);
+	return cleaned ? prefix + 'url=' + rewriteUrl(cleaned, baseUrl, workerOrigin) : raw;
 }
 
 // Cookie 命名空间（不提供浏览器安全隔离）
