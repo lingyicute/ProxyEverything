@@ -1730,7 +1730,7 @@ if(CK){
 /* ---- 链接点击与表单提交兜底（覆盖 innerHTML 动态插入节点与编程式 submit） ---- */
 function rwLinkEv(ev){
   try{
-    var t=ev.target;
+    var t=(ev.composedPath&&ev.composedPath()[0])||ev.target;
     if(t&&!t.closest)t=t.parentElement;
     var el=t&&t.closest?t.closest('a,area'):null;
     if(!el)return;

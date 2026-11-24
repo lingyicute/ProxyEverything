@@ -498,3 +498,20 @@ test('history.pushState and replaceState throw SecurityError on invalid URLs', (
 		assert.throws(() => ctx.history[method](null, '', 'https://[invalid'), { name: 'SecurityError' }, method);
 	}
 });
+
+test('click handler uses composedPath to rewrite links inside open shadow roots', () => {
+	let listener;
+	const { ctx } = createBrowser({
+		document: {
+			addEventListener(type, fn) { if (type === 'click') listener = fn; },
+			querySelectorAll() { return []; },
+		},
+	});
+	const anchor = new ctx.Element('a');
+	// Populate the raw attribute without passing through the patched setAttribute.
+	anchor.attrs.set('href', 'https://other.example/next');
+	const host = { closest() { return null; } };
+	const inner = { closest(sel) { return sel === 'a,area' ? anchor : null; } };
+	listener({ target: host, composedPath() { return [inner, anchor, host]; } });
+	assert.equal(anchor.getAttribute('href'), origin + '/~' + encodeURIComponent('https://other.example') + '/next');
+});
