@@ -111,6 +111,15 @@ test('HTML base affects anchor fragments, but not absent or empty form actions',
 		for (const h of handlers[tag]) h.element(el);
 		assert.equal(el.getAttribute(key), expected);
 	}
+	for (const [content, expected] of [
+		['0; url=#sec', `0; url=${proxy('/other/#sec')}`],
+		["0; url=''", `0; url=${proxy('/other/')}`],
+		['5;', '5;'],
+	]) {
+		const meta = element('meta', { 'http-equiv': 'refresh', content });
+		handlers.meta[0].element(meta);
+		assert.equal(meta.getAttribute('content'), expected, content);
+	}
 });
 
 test('XHTML style uses XML escaping while ordinary HTML uses raw text', () => {

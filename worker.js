@@ -667,7 +667,7 @@ function rewriteLazyValue(attr, value, baseUrl, workerOrigin) {
 }
 
 /** 按 HTML 规范重写 Refresh / meta refresh（支持多点延迟与省略 url= 的写法）。 */
-function rewriteRefreshContent(content, baseUrl, workerOrigin) {
+function rewriteRefreshContent(content, baseUrl, workerOrigin, resolveBase = false) {
 	const raw = String(content);
 	const m = /^([ \t\r\n\f]*[0-9.]+(?:[ \t\r\n\f]*[;,][ \t\r\n\f]*|[ \t\r\n\f]+))([\s\S]*)$/.exec(raw);
 	if (!m || !m[2]) return raw;
@@ -675,12 +675,16 @@ function rewriteRefreshContent(content, baseUrl, workerOrigin) {
 	const urlPrefix = /^url[ \t\r\n\f]*=[ \t\r\n\f]*/i.exec(rest);
 	const tail = urlPrefix ? rest.slice(urlPrefix[0].length) : rest;
 	let url = tail;
+	let quoted = false;
 	if (tail[0] === "'" || tail[0] === '"') {
+		quoted = true;
 		const end = tail.indexOf(tail[0], 1);
 		url = end >= 0 ? tail.slice(1, end) : tail.slice(1);
 	}
 	const cleaned = trimUrlSpace(url);
-	return cleaned ? prefix + 'url=' + rewriteUrl(cleaned, baseUrl, workerOrigin) : raw;
+	if (!cleaned && !(resolveBase && (quoted || urlPrefix))) return raw;
+	const rewritten = rewriteUrl(cleaned, baseUrl, workerOrigin, resolveBase);
+	return !cleaned && rewritten === cleaned ? raw : prefix + 'url=' + rewritten;
 }
 
 // Cookie 命名空间（不提供浏览器安全隔离）
@@ -2284,7 +2288,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck, sourceCharset = null
 			}
 			if (he === 'refresh') {
 				const c = getHtmlAttribute(el, 'content', isXml);
-				if (c) setHtmlAttribute(el, 'content', rewriteRefreshContent(c, baseHref, workerOrigin), isXml);
+				if (c) setHtmlAttribute(el, 'content', rewriteRefreshContent(c, baseHref, workerOrigin, hasBaseHref), isXml);
 			}
 			if (he === 'content-type') {
 				const c = getHtmlAttribute(el, 'content', isXml);
