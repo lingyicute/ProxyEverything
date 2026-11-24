@@ -3015,6 +3015,7 @@ const rewriteJsonUrls = capRewriteGrowth((account, text, baseUrl, workerOrigin) 
 		fields(item, ['url']);
 	}
 	fields(manifest.share_target, ['action']);
+	fields(manifest.note_taking, ['new_note_url']);
 	delete manifest.serviceworker;
 	return JSON.stringify(manifest);
 });
