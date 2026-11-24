@@ -773,7 +773,7 @@ function cookiePathMatches(cookiePath, requestPath) {
 /** Domain 必须匹配原始目标主机，不能因移除 Domain 而接受原本会被浏览器拒绝的 Cookie。 */
 function cookieDomainMatches(domain, targetUrl) {
 	if (!targetUrl) return false;
-	let value = String(domain).replace(/^\./, '');
+	const value = String(domain).replace(/^\./, '');
 	if (!value || value.endsWith('.') || value.includes('..') || !/^[a-z0-9_\-.\u0080-\u{10ffff}]+$/iu.test(value)) return false;
 	try {
 		const host = normalizeHostname(new URL(targetUrl).hostname);
