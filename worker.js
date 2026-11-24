@@ -1800,9 +1800,20 @@ if(CK){
 /* ---- 链接点击与表单提交兜底（覆盖 innerHTML 动态插入节点与编程式 submit） ---- */
 function rwLinkEv(ev){
   try{
-    var t=(ev.composedPath&&ev.composedPath()[0])||ev.target;
-    if(t&&!t.closest)t=t.parentElement;
-    var el=t&&t.closest?t.closest('a,area'):null;
+    var path=[];
+    try{if(typeof ev.composedPath==='function')path=ev.composedPath()||[];}catch(e){}
+    if(!path.length)path=[ev.target];
+    var el=null;
+    // 优先按组合事件路径找最近的链接：slot 和 shadow host 使 DOM closest() 的祖先次序不同。
+    for(var i=0;i<path.length;i++){
+      var node=path[i];
+      if(node&&typeof node.matches==='function'&&node.matches('a,area')){el=node;break;}
+    }
+    if(!el)for(var j=0;j<path.length;j++){
+      var t=path[j];
+      if(t&&!t.closest)t=t.parentElement;
+      if(t&&t.closest&&(el=t.closest('a,area')))break;
+    }
     if(!el)return;
     var h=el.getAttribute('href');
     if(h!==null){var p=rwNavigation(h,true);if(p&&p!==h)el.setAttribute('href',p);}

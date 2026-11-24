@@ -515,3 +515,37 @@ test('click handler uses composedPath to rewrite links inside open shadow roots'
 	listener({ target: host, composedPath() { return [inner, anchor, host]; } });
 	assert.equal(anchor.getAttribute('href'), origin + '/~' + encodeURIComponent('https://other.example') + '/next');
 });
+
+test('link events traverse shadow boundaries and prefer the nearest composed-path link', () => {
+	const listeners = {};
+	const { ctx } = createBrowser({
+		document: {
+			addEventListener(type, fn) { listeners[type] = fn; },
+			querySelectorAll() { return []; },
+		},
+	});
+	const link = href => {
+		const node = new ctx.Element('a');
+		node.attrs.set('href', href);
+		node.matches = selector => selector === 'a,area';
+		return node;
+	};
+	for (const type of ['click', 'auxclick', 'contextmenu']) {
+		const outer = link('https://other.example/outer');
+		const host = { closest() { return outer; } };
+		const leaf = { closest() { return null; } };
+		listeners[type]({ target: host, composedPath() { return [leaf, {}, host, outer]; } });
+		assert.equal(outer.getAttribute('href'), origin + '/~' + encodeURIComponent('https://other.example') + '/outer');
+
+		const inner = link('https://other.example/inner');
+		outer.attrs.set('href', 'https://other.example/outer');
+		// A slotted node's DOM closest() sees the outer link, but the composed path sees the inner link first.
+		const slotted = { closest() { return outer; } };
+		listeners[type]({ target: host, composedPath() { return [slotted, inner, {}, host, outer]; } });
+		assert.equal(inner.getAttribute('href'), origin + '/~' + encodeURIComponent('https://other.example') + '/inner');
+		assert.equal(outer.getAttribute('href'), 'https://other.example/outer');
+
+		listeners[type]({ target: host, composedPath() { return []; } });
+		assert.equal(outer.getAttribute('href'), origin + '/~' + encodeURIComponent('https://other.example') + '/outer');
+	}
+});
