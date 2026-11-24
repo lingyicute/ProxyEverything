@@ -713,3 +713,11 @@ test('ALLOWED_TARGET_ORIGINS rejects leading or consecutive dot hostnames', () =
 	}
 	assert.equal(targetPolicyError(target, { ALLOWED_TARGET_ORIGINS: 'https://example.com.' }), null);
 });
+
+test('policy blocks home.arpa special-use local hostnames', () => {
+	const env = { ALLOWED_TARGET_ORIGINS: 'https://home.arpa,https://router.home.arpa' };
+	for (const url of ['https://home.arpa/', 'https://router.home.arpa/', 'https://router.home.arpa./']) {
+		assert.equal(targetPolicyError(new URL(url), env)?.status, 403, url);
+	}
+	assert.ok(getRootHtml().includes('home.arpa'));
+});

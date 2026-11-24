@@ -3071,7 +3071,7 @@ function targetPolicyError(targetUrl, env) {
 	try { target.hostname = normalizeHostname(target.hostname); } catch {}
 	const host = normalizeHostname(target.hostname);
 	if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.startsWith('[') ||
-		host === 'localhost' || /\.(localhost|local|internal)$/.test(host)) {
+		host === 'localhost' || host === 'home.arpa' || /\.(localhost|local|internal|home\.arpa)$/.test(host)) {
 		return { status: 403, message: '不允许代理 IP 字面量或本地目标名称' };
 	}
 	const configured = env?.ALLOWED_TARGET_ORIGINS;
@@ -3987,7 +3987,7 @@ ${browserPathHelpers()}
       input.focus();
       return;
     }
-    if(/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(h)||h.charAt(0)==='['||h==='localhost'||/\\.(localhost|local|internal)$/.test(h)){
+    if(/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(h)||h.charAt(0)==='['||h==='localhost'||h==='home.arpa'||/\\.(localhost|local|internal|home\\.arpa)$/.test(h)){
       window.__peSnack('不允许代理 IP 字面量或本地目标名称');
       input.focus();
       return;
