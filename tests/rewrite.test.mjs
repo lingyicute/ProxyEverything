@@ -267,3 +267,10 @@ test('a non-GET upgrade is rejected instead of becoming an upstream GET', async 
 	assert.equal(r.headers.get('allow'), 'GET');
 	assert.equal(forwarded, null);
 });
+
+test('WebSocket upgrade matches websocket token in multi-value Upgrade headers', async () => {
+	const target = proxy('wss://example.com/socket');
+	const r = await send(target, { headers: { upgrade: 'h2c, WebSocket' } });
+	assert.equal(r.status, 502);
+	assert.equal(forwarded.headers.get('upgrade'), 'websocket');
+});

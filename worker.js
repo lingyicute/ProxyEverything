@@ -3269,7 +3269,7 @@ export default {
 			return new Response(null, { status: 204, headers });
 		}
 
-		const isWebSocket = (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket';
+		const isWebSocket = (request.headers.get('Upgrade') || '').split(',').some(v => v.trim().toLowerCase() === 'websocket');
 
 		// ---- robots.txt：允许收录首页，禁止抓取代理目标路径以防耗尽 Worker 配额 ----
 		if (!isWebSocket && url.pathname === '/robots.txt') {
