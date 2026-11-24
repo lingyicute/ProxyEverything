@@ -2612,9 +2612,10 @@ return parse;
 
 /** HTML 的 URL-like module specifier：只有 /、./、../ 开头才带基址解析。 */
 function rewriteModuleSpecifier(specifier, baseUrl, workerOrigin) {
-	const clean = trimUrlSpace(String(specifier)).replace(/[\t\r\n]/g, '');
-	// 为保持幂等，已是代理路径的说明符不能按目标站点路径再次包装。
-	if (isProxiedPath(clean)) return rewriteUrl(specifier, baseUrl, workerOrigin);
+	const raw = String(specifier);
+	const clean = trimUrlSpace(raw).replace(/[\t\r\n]/g, '');
+	// 为保持幂等，仅以 '/' 开头的已代理路径直接规范化；带前导空白的是裸说明符。
+	if (raw.startsWith('/') && isProxiedPath(raw.replace(/[\t\r\n]/g, ''))) return rewriteUrl(raw, baseUrl, workerOrigin);
 	try {
 		const isRel = /^(?:\/|\.\.?\/)/.test(specifier);
 		const resolved = isRel ? new URL(specifier, baseUrl) : new URL(specifier);

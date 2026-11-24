@@ -96,3 +96,10 @@ test('already proxied paths are not double-proxied and clamp dot segments', () =
 		imports: { [path]: origin + path },
 	});
 });
+
+test('bare module specifiers with leading whitespace before a proxied path stay untouched', () => {
+	for (const spec of [' /~https%3A%2F%2Fcdn.example/one.js', '\t/~https%3A%2F%2Fcdn.example/one.js']) {
+		const input = `import ${JSON.stringify(spec)};`;
+		assert.equal(rewriteJsModuleSpecifiers(input, base, origin), input);
+	}
+});
