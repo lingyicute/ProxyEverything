@@ -2292,7 +2292,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck, sourceCharset = null
 			}
 			if (he === 'content-type') {
 				const c = getHtmlAttribute(el, 'content', isXml);
-				if (c) setHtmlAttribute(el, 'content', c.replace(/charset\s*=\s*[^;]*/gi, 'charset=UTF-8'), isXml);
+				if (c) setHtmlAttribute(el, 'content', c.replace(/charset\s*=\s*(?:"[^"]*"|'[^']*'|[^;]*)/gi, 'charset=UTF-8'), isXml);
 			}
 			if (getHtmlAttribute(el, 'charset', isXml) != null) {
 				setHtmlAttribute(el, 'charset', 'UTF-8', isXml);

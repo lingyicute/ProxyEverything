@@ -97,6 +97,10 @@ test('HTMLRewriter URL and style attributes decode references once and escape se
 	panel.before = () => {};
 	handlers['*'][0].element(panel);
 	assert.equal(panel.getAttribute('style'), `background:url(&quot;${proxy('/dir/tile.png?a=1&amp;b=2')}&quot;)`);
+
+	const meta = element('meta', { 'http-equiv': 'content-type', content: 'text/html; charset="gbk;x"; foo=bar' });
+	handlers.meta[0].element(meta);
+	assert.equal(meta.getAttribute('content'), 'text/html; charset=UTF-8; foo=bar');
 });
 
 test('HTML base affects anchor fragments, but not absent or empty form actions', () => {
