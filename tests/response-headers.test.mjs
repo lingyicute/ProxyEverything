@@ -401,3 +401,20 @@ test('strips Attribution Reporting registration response headers', async () => {
 	const r = await fetchThrough('https://example.com/pixel', headers, 'ok');
 	for (const name of names) assert.equal(r.headers.get(name), null, name);
 });
+
+test('strips additional client IP forwarding request headers', async t => {
+	const stripped = [
+		'client-ip', 'x-cluster-client-ip', 'x-originating-ip',
+		'x-remote-ip', 'x-remote-addr', 'fly-client-ip', 'x-envoy-external-address',
+	];
+	let seen;
+	t.mock.method(globalThis, 'fetch', async (_, init) => {
+		seen = new Headers(init.headers);
+		return new Response('ok');
+	});
+	const headers = Object.fromEntries([...stripped.map(n => [n, '203.0.113.1']), ['x-keep', 'ok']]);
+	await worker.fetch(new Request(proxy('https://example.com/'), { headers }),
+		{ ALLOWED_TARGET_ORIGINS: 'https://example.com' });
+	for (const name of stripped) assert.equal(seen.get(name), null, name);
+	assert.equal(seen.get('x-keep'), 'ok');
+});
