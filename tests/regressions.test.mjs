@@ -675,3 +675,20 @@ test('UTF-16 XML declarations in ASCII-compatible bytes fall back to UTF-8', asy
 	const utf16 = Buffer.from('<?xml version="1.0" encoding="UTF-16"?><svg/>', 'utf16le');
 	assert.equal(sniffTextCharset(utf16, 'svg', null), 'utf-16le');
 });
+
+test('HTML sniffing detects unbommed UTF-16 XML declarations across chunks', async () => {
+	const le = Buffer.from('<?xml version="1.0"?><html></html>', 'utf16le');
+	const be = Buffer.from(le).swap16();
+	for (const [bytes, expected] of [[le, 'utf-16le'], [be, 'utf-16be']]) {
+		let i = 0;
+		const stream = new ReadableStream({
+			pull(c) { i < bytes.length ? c.enqueue(bytes.subarray(i, ++i)) : c.close(); },
+		});
+		const sniffed = await sniffHtmlCharset(stream);
+		assert.equal(sniffed.charset, expected);
+		await sniffed.body.cancel();
+	}
+	const other = await sniffHtmlCharset(new Response(Buffer.from([0x3c, 0, 0x3f, 0, 0x20, 0])).body);
+	assert.equal(other.charset, null);
+	await other.body.cancel();
+});

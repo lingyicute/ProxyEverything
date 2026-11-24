@@ -983,6 +983,21 @@ function utf16XmlSignature(head) {
 	return null;
 }
 
+function utf16HtmlXmlSignature(head, total) {
+	// WHATWG HTML §13.2.3.2：无 BOM 的 UTF-16LE/BE XML 声明（<?x）在预扫描前识别。
+	const le = [0x3c, 0, 0x3f, 0, 0x78, 0];
+	const be = [0, 0x3c, 0, 0x3f, 0, 0x78];
+	const limit = Math.min(total, 6);
+	let matchLe = true, matchBe = true;
+	for (let i = 0; i < limit; i++) {
+		if (head[i] !== le[i]) matchLe = false;
+		if (head[i] !== be[i]) matchBe = false;
+	}
+	if (!matchLe && !matchBe) return null;
+	if (total < 6) return 'pending';
+	return matchLe ? 'utf-16le' : 'utf-16be';
+}
+
 function utf8XmlDeclaration(declaration) {
 	return declaration.replace(XML_ATTR, (m, space, name) => name === 'encoding' ? `${space}encoding="UTF-8"` : m);
 }
@@ -1075,6 +1090,10 @@ async function sniffHtmlCharset(body, declaredCharset = null, isXml = false) {
 					charset = utf16XmlSignature(head);
 					if (charset) break;
 				}
+			} else {
+				const sig = utf16HtmlXmlSignature(head, total);
+				if (sig === 'pending') continue;
+				if (sig) { charset = sig; break; }
 			}
 			const prefixText = new TextDecoder().decode(head.subarray(0, total));
 			charset = isXml ? xmlDeclaredCharset(prefixText) : prescanHtmlCharset(prefixText);
