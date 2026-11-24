@@ -101,6 +101,13 @@ test('HTMLRewriter URL and style attributes decode references once and escape se
 	const meta = element('meta', { 'http-equiv': 'content-type', content: 'text/html; charset="gbk;x"; foo=bar' });
 	handlers.meta[0].element(meta);
 	assert.equal(meta.getAttribute('content'), 'text/html; charset=UTF-8; foo=bar');
+
+	for (const equiv of ['Accept-CH', 'Delegate-CH']) {
+		let removed = false;
+		const ch = Object.assign(element('meta', { 'http-equiv': equiv, content: 'Sec-CH-UA-Model' }), { remove() { removed = true; } });
+		handlers.meta[0].element(ch);
+		assert.equal(removed, true, equiv);
+	}
 });
 
 test('HTML base affects anchor fragments, but not absent or empty form actions', () => {

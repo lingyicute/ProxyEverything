@@ -2285,7 +2285,8 @@ function transformHtml(response, baseUrl, workerOrigin, ck, sourceCharset = null
 			const he = (getHtmlAttribute(el, 'http-equiv', isXml) || '').trim().toLowerCase();
 			const name = (getHtmlAttribute(el, 'name', isXml) || '').trim().toLowerCase();
 			if (he === 'content-security-policy' || he === 'content-security-policy-report-only' ||
-				he === 'set-cookie' || he === 'x-frame-options' || name === 'referrer') {
+				he === 'set-cookie' || he === 'x-frame-options' || he === 'accept-ch' ||
+				he === 'delegate-ch' || name === 'referrer') {
 				el.remove();
 				return;
 			}
