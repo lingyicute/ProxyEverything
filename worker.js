@@ -2322,7 +2322,8 @@ function transformHtml(response, baseUrl, workerOrigin, ck, sourceCharset = null
 				// 内容被我们改写过的资源必须去掉 SRI，否则哈希校验失败被浏览器拦截
 				if (tag === 'script' || tag === 'link') el.removeAttribute('integrity');
 				// 改写后的脚本带 charset=UTF-8 响应头，优先于此属性；它只影响原样透传的脚本。
-				if (tag === 'script' && scriptCharset && el.namespaceURI === htmlNamespace && el.hasAttribute('src')) {
+				if (tag === 'script' && scriptCharset && el.namespaceURI === htmlNamespace && el.hasAttribute('src') &&
+					(getHtmlAttribute(el, 'type', isXml) || '').trim().toLowerCase() !== 'module') {
 					const rawCharset = el.getAttribute('charset');
 					const keepCharset = rawCharset != null && ((isXml && hasCustomXmlEntity(rawCharset)) ||
 						Boolean(normalizeCharsetLabel(isXml ? decodeXmlAttribute(rawCharset) : decodeHtmlAttribute(rawCharset))));

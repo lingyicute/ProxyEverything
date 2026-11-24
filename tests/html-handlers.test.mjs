@@ -38,6 +38,7 @@ test('html: external scripts keep the source document encoding after transcoding
 	assert.equal(run(legacy, { src: 'a.js', charset: 'utf-8' }), 'utf-8', 'an explicit charset wins');
 	assert.equal(run(legacy, { src: 'a.js', charset: '' }), 'gbk', 'empty charset falls back to document encoding');
 	assert.equal(run(legacy, { src: 'a.js', charset: 'not-a-charset' }), 'gbk', 'invalid charset falls back to document encoding');
+	assert.equal(run(legacy, { src: 'a.js', type: 'module' }), null, 'module scripts always decode as UTF-8');
 	assert.equal(run(legacy, {}), null, 'inline scripts are not fetched');
 	assert.equal(run(collectHandlers('application/xhtml+xml', 'windows-1252'), { src: 'a.js' }), 'windows-1252');
 	for (const charset of [null, 'utf-8']) {
