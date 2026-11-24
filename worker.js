@@ -282,7 +282,6 @@ function normalizeProxiedUrl(raw, workerOrigin, keepOrigin, parsed = null) {
 
 /** 将 <base href> 或 xml:base 解析为真实目标基地址，解包已代理路径或代理域自身地址。 */
 function resolveTargetBaseUrl(raw, fallbackBase, workerOrigin, httpOnly = false) {
-	if (!fallbackBase) return '';
 	const clean = trimUrlSpace(String(raw)).replace(/[\t\r\n]/g, '');
 	const allow = (u) => !httpOnly || u.protocol === 'http:' || u.protocol === 'https:';
 	if (isProxiedPath(clean)) {
@@ -291,7 +290,7 @@ function resolveTargetBaseUrl(raw, fallbackBase, workerOrigin, httpOnly = false)
 		if (target && allow(target)) return target.href;
 	}
 	try {
-		const u = new URL(raw, fallbackBase);
+		const u = fallbackBase ? new URL(raw, fallbackBase) : new URL(raw);
 		if (!allow(u)) return '';
 		if (isWorkerHost(u, workerOrigin)) {
 			const cut = clean.search(/[?#]/);
@@ -302,7 +301,7 @@ function resolveTargetBaseUrl(raw, fallbackBase, workerOrigin, httpOnly = false)
 				const target = decodeProxiedTarget(rawSelf, cut < 0 ? '' : clean.slice(cut));
 				if (target && allow(target)) return target.href;
 			}
-			return new URL(new URL(fallbackBase).origin + u.pathname + urlSuffix(u)).href;
+			return fallbackBase ? new URL(new URL(fallbackBase).origin + u.pathname + urlSuffix(u)).href : '';
 		}
 		return u.href;
 	} catch {

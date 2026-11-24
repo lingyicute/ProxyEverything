@@ -45,6 +45,9 @@ test('SVG preserves fragment semantics and uses exact qualified names for base s
 test('SVG does not invent a base when a custom XML entity cannot be resolved', () => {
 	const input = '<!DOCTYPE svg [<!ENTITY assets "/images/">]><svg xml:base="&assets;"><image href="logo.png"/></svg>';
 	assert.equal(rewrite(input), input);
+	const nested = '<!DOCTYPE svg [<!ENTITY assets "/images/">]><svg xml:base="&assets;"><g xml:base="sub/"><image href="a.png"/></g><g xml:base="https://site.example/abs/"><image href="b.png"/></g></svg>';
+	assert.equal(rewrite(nested),
+		`<!DOCTYPE svg [<!ENTITY assets "/images/">]><svg xml:base="&assets;"><g xml:base="sub/"><image href="a.png"/></g><g xml:base="${proxy('/abs/')}"><image href="${proxy('/abs/b.png')}"/></g></svg>`);
 });
 
 const miniflare = process.env.PE_MINIFLARE;
