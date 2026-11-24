@@ -2755,7 +2755,7 @@ function readXmlTextEnd(source, start, qualifiedName) {
 			while (/[ \t\n\r]/.test(source[end] || '')) end++;
 			if (source[end] === '>') return { start: i, end: end + 1 };
 		}
-		if (!source.startsWith('<!--', i) && !source.startsWith('<![CDATA[', i)) return null;
+		if (!source.startsWith('<!--', i) && !source.startsWith('<![CDATA[', i) && !source.startsWith('<?', i)) return null;
 		const markup = readXmlMarkup(source, i);
 		if (!markup.kind) return null;
 		i = markup.end;
@@ -2782,15 +2782,15 @@ const rewriteXmlText = capRewriteGrowth((account, body, transform) => {
 		}
 		return next === decoded ? part : escapeXmlText(next);
 	};
-	const opener = /<!\[CDATA\[|<!--/g;
+	const opener = /<!\[CDATA\[|<!--|<\?/g;
 	let match;
 	while ((match = opener.exec(body))) {
-		const cdata = match[0] === '<![CDATA[';
-		const end = body.indexOf(cdata ? ']]>' : '-->', opener.lastIndex);
+		const close = match[0] === '<![CDATA[' ? ']]>' : match[0] === '<!--' ? '-->' : '?>';
+		const end = body.indexOf(close, opener.lastIndex);
 		if (end < 0) return body;
 		const before = body.slice(last, match.index);
 		if (before) out += account(before.length, pushText(before));
-		if (cdata) {
+		if (close === ']]>') {
 			hasCdata = true;
 			const inner = body.slice(opener.lastIndex, end);
 			const next = transform(inner);
@@ -2800,9 +2800,9 @@ const rewriteXmlText = capRewriteGrowth((account, body, transform) => {
 			}
 			out += account(end + 3 - match.index, `<![CDATA[${next.replace(/]]>/g, ']]]]><![CDATA[>')}]]>`);
 		} else {
-			out += body.slice(match.index, end + 3);
+			out += body.slice(match.index, end + close.length);
 		}
-		last = opener.lastIndex = end + 3;
+		last = opener.lastIndex = end + close.length;
 	}
 	const tail = body.slice(last);
 	if (tail || !out) out += account(tail.length, pushText(tail));

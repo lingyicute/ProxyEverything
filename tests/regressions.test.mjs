@@ -378,8 +378,17 @@ test('XML raw text leaves incomplete CDATA and comments intact', () => {
 	for (const input of ['body <![CDATA[unfinished', 'text <!-- open <!-- still open']) {
 		assert.equal(rewriteXmlText(input, value => value.toUpperCase()), input);
 	}
-	assert.equal(rewriteXmlText('a<!--keep--><![CDATA[b]]>c', s => s.toUpperCase()),
-		'A<!--keep--><![CDATA[B]]>C');
+	assert.equal(rewriteXmlText('a<!--keep--><?pi keep?><![CDATA[b]]>c', s => s.toUpperCase()),
+		'A<!--keep--><?pi keep?><![CDATA[B]]>C');
+	assert.equal(rewriteXmlText('body <?pi unfinished', s => s.toUpperCase()), 'body <?pi unfinished');
+	assert.equal(
+		rewriteSvg('<svg><style><?pi </style> ?>a{background:url(a.png)}</style></svg>', base, origin),
+		`<svg><style><?pi </style> ?>a{background:url("${proxy('a.png')}")}</style></svg>`
+	);
+	assert.equal(
+		rewriteSvg('<svg><script type="module">import <?pi x?>"./a.js";</script></svg>', base, origin),
+		`<svg><script type="module">import "${proxy('./a.js')}";</script></svg>`
+	);
 });
 
 test('upstream HTTP and opening WebSocket handshakes use the request cancellation signal', async t => {
