@@ -327,7 +327,7 @@ test('bodyless revalidation preserves the request cache policy variant without C
 
 test('SameSite=None and Partitioned cookies require an upstream Secure attribute', async () => {
 	const headers = new Headers({ 'content-type': 'text/plain' });
-	for (const cookie of ['cross=1; SameSite=None', 'chips=2; Partitioned',
+	for (const cookie of ['cross=1; SameSite=None', 'chips=2; Partitioned', 'ctl=1\x7f; Path=/',
 		'valid=3; SameSite=None; Secure', 'part=4; Secure; Partitioned', 'lax=5; SameSite=None; SameSite=Lax']) {
 		headers.append('Set-Cookie', cookie);
 	}

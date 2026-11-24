@@ -261,6 +261,9 @@ test('document.cookie shares protected cookie names without accepting HTTP-only 
 	assert.equal(last, '');
 	ctx.document.cookie = 'pref=two; SameSite=None';
 	assert.equal(last, '');
+	ctx.document.cookie = 'bad=1\ninjected=2';
+	ctx.document.cookie = 'bad=1\x00x';
+	assert.equal(last, '');
 	ctx.document.cookie = '__Host-pref=two; Secure; Path=/';
 	assert.equal(last, `__Host-${ns}pref=two; Secure; Path=/`);
 });

@@ -725,7 +725,10 @@ function originalCookieName(stored, ns) {
  * 返回 null 表示这条 cookie 无效、应丢弃。
  */
 function scopeSetCookie(c, ns, workerIsHttps, fromScript = false) {
-	const parts = String(c).split(';');
+	const rawCookie = String(c);
+	// RFC 6265bis 拒绝除水平制表符外的控制字符（含 NUL/CR/LF/DEL）。
+	if (/[\x00-\x08\x0a-\x1f\x7f]/.test(rawCookie)) return null;
+	const parts = rawCookie.split(';');
 	const head = parts[0];
 	const eq = head.indexOf('=');
 	if (eq < 0) return null;
