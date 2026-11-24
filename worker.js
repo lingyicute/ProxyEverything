@@ -1554,7 +1554,9 @@ if(WS)['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k,i){try{WS[k]=i
 /* ---- history / window.open / location.assign ---- */
 function wrapHistory(fn){return function(st,t,u){
   if(u!=null){
-    var next=rwNavigation(String(u),true);
+    var raw=String(u);
+    if(!raw){arguments[2]=raw;return fn.apply(this,arguments);}
+    var next=rwNavigation(raw,true);
     var link;
     try{link=new URL(next,location.href);}catch(e){throw new DOMException('Invalid history URL','SecurityError');}
     if(isSelfHost(link)){

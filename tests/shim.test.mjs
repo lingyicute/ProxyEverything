@@ -364,13 +364,18 @@ test('DOM ping lists retain Unicode URL characters and ASCII separators', () => 
 	assert.equal(a.getAttribute('ping'), ` ${proxy('/a%C2%A0b')}\t${proxy('/next')} `);
 });
 
-test('history state updates resolve empty URLs against base and block dot-segment escapes', () => {
+test('history state updates preserve empty URLs, resolve whitespace against base, and block dot-segment escapes', () => {
 	const calls = [];
 	const save = (...args) => calls.push(args[2]);
 	const { ctx } = createBrowser({ DOMException, history: { pushState: save, replaceState: save } });
-	ctx.document.querySelectorAll = () => [{ getAttribute: name => name === 'data-pe-base' ? 'https://example.com/sub/index.html' : null }];
+	ctx.document.querySelectorAll = () => [{ getAttribute: name => name === 'data-pe-base' ? 'https://other.example/sub/index.html' : null }];
 	ctx.history.pushState(null, '', '');
-	assert.equal(calls[0], proxy('/sub/index.html'));
+	assert.equal(calls[0], '');
+	assert.throws(() => ctx.history.pushState(null, '', ' '), { name: 'SecurityError' });
+	ctx.document.querySelectorAll = () => [{ getAttribute: name => name === 'data-pe-base' ? 'https://example.com/sub/index.html' : null }];
+	ctx.history.pushState(null, '', ' ');
+	assert.equal(calls[1], proxy('/sub/index.html'));
+	calls.length = 1;
 	ctx.history.replaceState(null, '', '/~https%3A%2F%2Fexample.com./sub/next');
 	assert.equal(calls[1], '/~https%3A%2F%2Fexample.com./sub/next');
 	ctx.history.pushState(null, '', '/~https%3A%2F%2Fexample.com/../other.example/inside');
