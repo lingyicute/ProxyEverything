@@ -28,6 +28,16 @@ export default {
     if (url.pathname === '/style.css') {
       return new Response('a{background:url(pic.png)}', { headers: { 'Content-Type': 'text/css', 'Content-Encoding': 'gzip' } });
     }
+    if (url.pathname === '/cookies/set') {
+      const headers = new Headers();
+      headers.append('Set-Cookie', 'sid=root; Path=/');
+      headers.append('Set-Cookie', 'sid=section; Path=/cookies');
+      headers.append('Set-Cookie', 'invalid=1; Domain=other.example; Path=/');
+      return new Response('set', { headers });
+    }
+    if (url.pathname === '/cookies/echo' || url.pathname === '/outside') {
+      return new Response(request.headers.get('Cookie') || '');
+    }
     if (url.pathname === '/socket' || url.pathname === '/' || url.pathname === '/robots.txt') {
       const pair = new WebSocketPair();
       pair[0].accept();
@@ -93,6 +103,15 @@ test('real Workerd: HTML, compressed HTTP, URL encoding and WebSocket', {
 	assert.equal(await css.text(), `a{background:url("${proxy}/pic.png")}`);
 	const path = await runtime.dispatchFetch(proxy + '/asset/a%2Fb?x=1');
 	assert.equal(await path.text(), '/asset/a%2Fb?x=1');
+
+	const cookieResponse = await runtime.dispatchFetch(proxy + '/cookies/set');
+	const setCookies = cookieResponse.headers.getSetCookie();
+	assert.equal(setCookies.length, 2);
+	const cookieHeader = setCookies.map(value => value.split(';', 1)[0]).join('; ');
+	const section = await runtime.dispatchFetch(proxy + '/cookies/echo', { headers: { Cookie: cookieHeader } });
+	assert.equal(await section.text(), 'sid=section; sid=root');
+	const outside = await runtime.dispatchFetch(proxy + '/outside', { headers: { Cookie: cookieHeader } });
+	assert.equal(await outside.text(), 'sid=root');
 
 	for (const url of [proxy + '/socket', 'https://proxy.example/', 'https://proxy.example/robots.txt']) {
 		const upgrade = await runtime.dispatchFetch(url, {

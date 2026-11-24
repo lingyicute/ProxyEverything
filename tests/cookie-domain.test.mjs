@@ -14,7 +14,7 @@ const proxy = origin + '/~' + encodeURIComponent(new URL(target).origin) + '/dir
 
 test('cookie Domain is checked against the original host before it is removed', () => {
 	for (const domain of ['api.example.com', '.example.com', 'EXAMPLE.COM', '']) {
-		const out = scopeSetCookie('sid=ok; Domain=' + domain, namespace, true, false, target);
+		const out = scopeSetCookie('sid=ok; Domain=' + domain + '; Path=/', namespace, true, false, target);
 		assert.equal(out, namespace + 'sid=ok; Path=/', domain);
 	}
 	for (const domain of ['other.example.com', 'ample.com', '.com', 'example.com.', '..example.com',
@@ -23,7 +23,7 @@ test('cookie Domain is checked against the original host before it is removed', 
 		assert.equal(scopeSetCookie('sid=bad; Domain=' + domain, namespace, true, false, target), null, domain);
 	}
 	assert.equal(scopeSetCookie('sid=bad; Domain=example.com', namespace, true), null);
-	assert.equal(scopeSetCookie('sid=ok; Domain=evil.example; Domain=.example.com', namespace, true, false, target), namespace + 'sid=ok; Path=/');
+	assert.equal(scopeSetCookie('sid=ok; Domain=evil.example; Domain=.example.com; Path=/', namespace, true, false, target), namespace + 'sid=ok; Path=/');
 	assert.equal(scopeSetCookie('sid=bad; Domain=.example.com; Domain=evil.example; Domain=', namespace, true, false, target), null);
 	assert.notEqual(scopeSetCookie('sid=ok; Domain=bücher.example', namespace, true, false, 'https://api.bücher.example/'), null);
 	assert.equal(scopeSetCookie('__Host-sid=bad; Secure; Path=/; Domain=', namespace, true, false, target), null);
@@ -31,7 +31,7 @@ test('cookie Domain is checked against the original host before it is removed', 
 
 test('HTTP responses discard cookies for an unrelated Domain', async t => {
 	const headers = new Headers({ 'Content-Type': 'text/plain' });
-	headers.append('Set-Cookie', 'valid=1; Domain=.example.com; Secure');
+	headers.append('Set-Cookie', 'valid=1; Domain=.example.com; Secure; Path=/');
 	headers.append('Set-Cookie', 'invalid=2; Domain=elsewhere.example; Secure');
 	t.mock.method(globalThis, 'fetch', async () => new Response('ok', { headers }));
 	const response = await worker.fetch(new Request(proxy), { ALLOWED_TARGET_ORIGINS: 'https://api.example.com' });
@@ -57,6 +57,6 @@ test('document.cookie applies the same Domain check as HTTP responses', () => {
 	vm.runInNewContext(getShimScript(origin, namespace).replace(/^<script>/, '').replace(/<\/script>$/, ''), ctx);
 	document.cookie = 'bad=1; Domain=elsewhere.example';
 	assert.equal(last, '');
-	document.cookie = 'good=1; Domain=.example.com';
+	document.cookie = 'good=1; Domain=.example.com; Path=/';
 	assert.equal(last, namespace + 'good=1; Path=/');
 });
