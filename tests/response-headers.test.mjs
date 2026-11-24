@@ -366,3 +366,11 @@ test('Connection header cannot strip X-Content-Type-Options', async () => {
 	assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
 	assert.equal(r.headers.get('x-transient'), null);
 });
+
+test('strips Use-As-Dictionary origin-wide compression dictionary header', async () => {
+	const r = await fetchThrough('https://example.com/app.js', {
+		'content-type': 'text/plain',
+		'use-as-dictionary': 'match="/app/*"',
+	}, 'ok');
+	assert.equal(r.headers.get('use-as-dictionary'), null);
+});

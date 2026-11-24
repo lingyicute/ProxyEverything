@@ -65,6 +65,7 @@ const STRIP_RESPONSE_HEADERS = [
 	'activate-storage-access', // Storage Access 状态作用于整个代理源
 	'observe-browsing-topics', // 避免代表代理源记录上游的 Topics 观测
 	'supports-loading-mode',
+	'use-as-dictionary',  // 共享压缩字典按代理源持久化，可能跨目标站点生效
 ];
 
 // 仅正文变换时移除；透传响应必须保留其表示元数据。
