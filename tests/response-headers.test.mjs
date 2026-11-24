@@ -355,3 +355,14 @@ test('authenticated redirects reject opaque non-HTTP schemes carrying the same h
 		assert.equal(r.status, 502, location);
 	}
 });
+
+test('Connection header cannot strip X-Content-Type-Options', async () => {
+	const r = await fetchThrough('https://example.com/file.txt', {
+		'content-type': 'text/plain',
+		'x-content-type-options': 'nosniff',
+		connection: 'X-Content-Type-Options, X-Transient',
+		'x-transient': '1',
+	}, 'ok');
+	assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+	assert.equal(r.headers.get('x-transient'), null);
+});

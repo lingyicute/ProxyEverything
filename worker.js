@@ -105,7 +105,7 @@ const PROTECTED_END_TO_END = new Set([
 	'etag', 'last-modified', 'accept-ranges', 'content-disposition',
 	'accept', 'accept-encoding', 'accept-language', 'user-agent',
 	'allow', 'retry-after', 'age', 'expires', 'date', 'pragma',
-	'x-robots-tag', 'service-worker', 'sec-fetch-dest', 'sec-fetch-mode',
+	'x-content-type-options', 'x-robots-tag', 'service-worker', 'sec-fetch-dest', 'sec-fetch-mode',
 	'sec-fetch-site', 'sec-fetch-user', 'sec-websocket-protocol', 'sec-websocket-key',
 	'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-accept',
 	'access-control-allow-origin', 'access-control-allow-credentials',
