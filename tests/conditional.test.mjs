@@ -52,6 +52,22 @@ test('untransformed 304 responses are retained only if the retry confirms their 
 	assert.equal(seen.length, 2);
 });
 
+test('media and font requests keep a source 304 without a retry', async t => {
+	const dests = ['audio', 'video', 'track', 'font'];
+	const seen = fixtures(t, [...dests.map(() => notModified({ ETag: '"source"' })),
+		notModified({ ETag: '"source"' }), response('image/png', '"source"', 'image')]);
+	for (const dest of dests) {
+		const r = await worker.fetch(new Request(proxy, { headers: { 'If-None-Match': '"source"', 'Sec-Fetch-Dest': dest } }), env);
+		assert.equal(r.status, 304, dest);
+		assert.equal(r.headers.get('etag'), '"source"', dest);
+	}
+	assert.equal(seen.length, dests.length);
+	// 其它目标（含可能是 SVG 的图片）仍按原规则重新取回。
+	const r = await worker.fetch(new Request(proxy, { headers: { 'If-None-Match': '"source"', 'Sec-Fetch-Dest': 'image' } }), env);
+	assert.equal(r.status, 304);
+	assert.equal(seen.length, dests.length + 2);
+});
+
 test('a changed or cookie-setting retry returns the new complete response', async t => {
 	const seen = fixtures(t, [
 		notModified({ ETag: '"source"' }), response('image/png', '"new"', 'new image'),

@@ -1272,6 +1272,9 @@ function buildResponse(upstream, request, ck, baseUrl) {
 
 function isCacheableMethod(m) { return m === 'GET' || m === 'HEAD'; }
 
+// 浏览器按这些目标使用响应时不会把它当作文档、脚本或样式，因此 304 不必再回源判断是否会变换。
+const UNTRANSFORMED_FETCH_DEST = new Set(['audio', 'video', 'track', 'font']);
+
 /** 确认重新取到的未变换表示仍是 304 所验证的同一版本。 */
 function sameRevalidationIdentity(notModified, current) {
 	const oldTag = notModified.headers.get('ETag');
@@ -3485,6 +3488,7 @@ Disallow: /
 			// 因此无条件重取以判断是否会转换；未变换且版本未改变时仍返回原来的 304。
 			if (upstream.status === 304 && isCacheableMethod(request.method) &&
 				(fwdHeaders.has('If-None-Match') || fwdHeaders.has('If-Modified-Since')) &&
+				!UNTRANSFORMED_FETCH_DEST.has((request.headers.get('Sec-Fetch-Dest') || '').toLowerCase()) &&
 				!hasNoTransform(request.headers.get('Cache-Control')) && !hasNoTransform(upstream.headers.get('Cache-Control'))) {
 				const retryHeaders = new Headers(fwdHeaders);
 				retryHeaders.delete('If-None-Match');
