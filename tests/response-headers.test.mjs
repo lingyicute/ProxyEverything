@@ -221,7 +221,10 @@ test('bodyless responses do not advertise source metadata for a rewritten GET', 
 	}
 
 	// 声明长度超过改写上限且无需解码的正文一定会原样透传，HEAD 沿用 GET 的表示元数据。
-	for (const [length, encoding, intact] of [['3000000', null, true], ['3000000', 'gzip', false], ['2097152', null, false]]) {
+	for (const [length, encoding, intact] of [
+		['3000000', null, true], ['3000000', 'gzip', false], ['2097152', null, false],
+		['Infinity', null, false], ['1e9', null, false], ['0x300000', null, false],
+	]) {
 		const headers = { 'content-type': 'text/css; charset=gbk', 'content-length': length, etag: '"big"' };
 		if (encoding) headers['content-encoding'] = encoding;
 		upstream = new Response(null, { headers });

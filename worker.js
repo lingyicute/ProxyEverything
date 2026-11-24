@@ -3349,7 +3349,8 @@ Disallow: /
 			const kind = [204, 205, 206].includes(upstream.status) || hasNoTransform(request.headers.get('Cache-Control'))
 				? null : transformKind(upstream.headers, request);
 			// 声明长度超过上限且无需解码的正文必然原样透传，HEAD 可沿用与 GET 相同的表示元数据。
-			const declaredLength = Number(upstream.headers.get('Content-Length'));
+			const rawLength = upstream.headers.get('Content-Length')?.trim() || '';
+			const declaredLength = /^\d+$/.test(rawLength) ? Number(rawLength) : NaN;
 			const passthrough = kind !== null && kind !== 'html' && request.method === 'HEAD' &&
 				declaredLength > MAX_TRANSFORM_BYTES && contentCoding(upstream.headers) === 'identity';
 			if (kind && !passthrough) {
