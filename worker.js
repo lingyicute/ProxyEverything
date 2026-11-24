@@ -238,7 +238,8 @@ function decodeProxiedTarget(rawPath, suffix = '') {
 	const hash = hashCut < 0 ? '' : suffix.slice(hashCut);
 	const baseTarget = decoded.split('#', 1)[0];
 	try {
-		const extraQuery = query ? (baseTarget.includes('?') ? (query.length > 1 ? '&' + query.slice(1) : '') : query) : '';
+		const sep = baseTarget.endsWith('?') || baseTarget.endsWith('&') ? '' : '&';
+		const extraQuery = query ? (baseTarget.includes('?') ? (query.length > 1 ? sep + query.slice(1) : '') : query) : '';
 		const target = new URL(baseTarget + extraQuery + hash);
 		if (!['http:', 'https:', 'ws:', 'wss:'].includes(target.protocol) || target.username || target.password) return null;
 		const host = normalizeHostname(target.hostname);
@@ -1262,7 +1263,7 @@ var DEC=trimUrlSpace(decodeProxyPath(location.pathname)).replace(/^\\/+/,'');
 if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(DEC))DEC='https://'+DEC;
 var hIdx=DEC.indexOf('#');if(hIdx>=0)DEC=DEC.substring(0,hIdx);
 var search=urlSuffix(new URL(location.href)).split('#',1)[0];
-var full=DEC+(search?(DEC.indexOf('?')>=0?(search.length>1?'&'+search.substring(1):''):search):'');
+var full=DEC+(search?(DEC.indexOf('?')>=0?(search.length>1?(/[?&]$/.test(DEC)?'':'&')+search.substring(1):''):search):'');
 try{var u=new URL(full);if(u.protocol==='ws:')u.protocol='http:';else if(u.protocol==='wss:')u.protocol='https:';u.username='';u.password='';u.hostname=u.hostname.toLowerCase().replace(/\\.+$/,'');return u.href;}catch(e){return full;}
 }
 var SKIP_RE=/^(data:|blob:|javascript:|mailto:|tel:|sms:|about:|#)/i;
@@ -3038,7 +3039,8 @@ function parseTarget(url) {
 	// 不保留内部参数名：目标站可能合法使用 __pe，且查询串可能参与签名。
 	const search = urlSuffix(url).split('#', 1)[0];
 	if (search) {
-		target += target.includes('?') ? (search.length > 1 ? '&' + search.slice(1) : '') : search;
+		const sep = target.endsWith('?') || target.endsWith('&') ? '' : '&';
+		target += target.includes('?') ? (search.length > 1 ? sep + search.slice(1) : '') : search;
 	}
 	let u;
 	try { u = new URL(target); } catch { return null; }
@@ -3963,7 +3965,7 @@ ${browserPathHelpers()}
         var hIdx=dec.indexOf('#');
         if(hIdx>=0)dec=dec.slice(0,hIdx);
         var sh=sPart.indexOf('#'),sq=sh<0?sPart:sPart.slice(0,sh),sf=sh<0?'':sPart.slice(sh);
-        if(sq&&dec.indexOf('?')>=0)sq=sq.length>1?'&'+sq.slice(1):'';
+        if(sq&&dec.indexOf('?')>=0)sq=sq.length>1?(/[?&]$/.test(dec)?'':'&')+sq.slice(1):'';
         v=dec+sq+sf;
       }
     }

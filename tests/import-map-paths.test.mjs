@@ -75,6 +75,10 @@ test('path separators survive while encoded slashes and legacy links round-trip'
 		'https://site.example/old/a%2Fb');
 	assert.equal(parseTarget(new URL(proxy + '/https%3A%2F%2Fsite.example%2Fp%3Fa%3D1?')).href,
 		'https://site.example/p?a=1');
+	assert.equal(parseTarget(new URL(proxy + '/https%3A%2F%2Fsite.example%2Fp%3F?a=1')).href,
+		'https://site.example/p?a=1');
+	assert.equal(parseTarget(new URL(proxy + '/https%3A%2F%2Fsite.example%2Fp%3Fx%3D1%26?a=1')).href,
+		'https://site.example/p?x=1&a=1');
 	assert.equal(parseTarget(new URL(proxy + '/~https%3A%2F%2Fsite.example/p?')).href,
 		'https://site.example/p?');
 });
