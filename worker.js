@@ -39,6 +39,7 @@ const STRIP_RESPONSE_HEADERS = [
 	'report-to',
 	'nel',
 	'permissions-policy',
+	'permissions-policy-report-only',
 	'feature-policy',     // Permissions-Policy 的旧名，同样按原站来源声明
 	'integrity-policy',   // 要求脚本带 SRI；代理已移除改写后失效的 integrity，保留会拦截全部脚本
 	'integrity-policy-report-only',
@@ -57,9 +58,13 @@ const STRIP_RESPONSE_HEADERS = [
 	'reporting-endpoints',
 	// 以下作用于整个代理源并被浏览器持久化，会串到其它目标站点
 	'accept-ch',          // Client Hints 偏好按源保存，其它目标也会收到高熵 UA 提示
+	'accept-ch-lifetime',
 	'critical-ch',        // 配合 Accept-CH 触发导航重试
 	'origin-agent-cluster', // 首个目标的选择会锁定整个代理源的 agent cluster 键
 	'set-login',          // FedCM 登录状态记在代理源上
+	'activate-storage-access', // Storage Access 状态作用于整个代理源
+	'observe-browsing-topics', // 避免代表代理源记录上游的 Topics 观测
+	'supports-loading-mode',
 ];
 
 // 仅正文变换时移除；透传响应必须保留其表示元数据。

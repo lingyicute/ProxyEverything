@@ -51,9 +51,14 @@ test('origin-wide persistent policy headers do not leak onto the shared proxy or
 	const headers = {
 		'content-type': 'image/png',
 		'accept-ch': 'Sec-CH-UA-Full-Version-List, Sec-CH-UA-Model',
+		'accept-ch-lifetime': '86400',
 		'critical-ch': 'Sec-CH-UA-Model',
 		'origin-agent-cluster': '?1',
 		'set-login': 'logged-in',
+		'activate-storage-access': 'load',
+		'observe-browsing-topics': '?1',
+		'supports-loading-mode': 'credentialed-prerender',
+		'permissions-policy-report-only': 'camera=()',
 	};
 	const response = await fetchThrough('https://example.com/a.png', headers);
 	for (const name of Object.keys(headers).slice(1)) assert.equal(response.headers.get(name), null, name);
