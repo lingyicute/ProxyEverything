@@ -947,7 +947,15 @@ function prescanHtmlCharset(text) {
 		}
 		tag.lastIndex = start;
 		const match = tag.exec(text);
-		if (!match) { start++; continue; }
+		if (!match) {
+			// 与 <! 和 <? 一样，</ 后不跟字母时跳到下一个 '>'（分词器也把它当伪注释）。
+			if (text[start + 1] === '/') {
+				const end = text.indexOf('>', start + 2);
+				if (end < 0) return null;
+				start = end + 1;
+			} else start++;
+			continue;
+		}
 		const meta = match[1].toLowerCase() === 'meta' && text[start + 1] !== '/';
 		const scanned = scanHtmlPrescanAttrs(text, tag.lastIndex, meta);
 		if (!scanned) return null;

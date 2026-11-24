@@ -307,6 +307,24 @@ test('sniffHtmlCharset handles HTML5 abrupt comments <!--> and <!--->', async ()
 	}
 });
 
+test('sniffHtmlCharset skips </ without a tag name up to the next >', async () => {
+	for (const [html, expected] of [
+		['</ <meta charset="gbk"><p>', null],
+		['</ x><meta charset="gbk">', 'gbk'],
+		['</p foo="<meta charset=big5>"><meta charset="gbk">', 'gbk'],
+	]) {
+		const stream = new ReadableStream({
+			start(controller) {
+				controller.enqueue(Buffer.from(html, 'latin1'));
+				controller.close();
+			},
+		});
+		const { charset, body } = await sniffHtmlCharset(stream, null);
+		await body.cancel();
+		assert.equal(charset, expected, html);
+	}
+});
+
 test('fast paths preserve untouched JS/CSS while still rewriting escaped style URLs', () => {
 	const plainJs = 'const a = 1 + 2; console.log(a);';
 	assert.equal(rewriteJsModuleSpecifiers(plainJs, base, origin), plainJs);
