@@ -764,7 +764,8 @@ function scopeSetCookie(c, ns, workerIsHttps, fromScript = false) {
 		if (attr === 'path') { path = split < 0 ? '' : part.slice(split + 1).trim(); continue; }
 		if (attr === 'httponly') {
 			if (fromScript) return null;
-			hasHttpOnly = true;
+			if (!hasHttpOnly) { out.push('HttpOnly'); hasHttpOnly = true; }
+			continue;
 		}
 		if (attr === 'secure') {
 			if (!workerIsHttps) return null;

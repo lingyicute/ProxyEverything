@@ -431,3 +431,11 @@ test('strips X-Url-Scheme forwarding request header', async t => {
 	assert.equal(seen.get('x-url-scheme'), null);
 	assert.equal(seen.get('x-keep'), 'ok');
 });
+
+test('Set-Cookie normalizes and deduplicates HttpOnly attributes', async () => {
+	const headers = new Headers({ 'content-type': 'text/plain' });
+	headers.append('Set-Cookie', 'sid=1; HttpOnly=ignored; httponly; Secure');
+	const r = await fetchThrough('https://example.com/login', headers);
+	const [cookie] = r.headers.getSetCookie();
+	assert.match(cookie, /_sid=1; HttpOnly; Secure; Path=\/$/);
+});
