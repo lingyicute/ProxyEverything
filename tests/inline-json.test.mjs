@@ -127,3 +127,14 @@ for (const scope of ['imports', 'scopes']) {
 		});
 	}
 }
+
+test('speculationrules: strips referrer_policy so speculative fetches keep proxy Referer', () => {
+	const input = JSON.stringify({
+		prefetch: [{ source: 'list', urls: ['./next.html'], referrer_policy: 'no-referrer' }],
+		prerender: [{ source: 'document', where: { selector_matches: 'a' }, referrer_policy: 'origin' }],
+	});
+	const output = JSON.parse(rewriteSpeculationRules(input, base, origin));
+	assert.equal('referrer_policy' in output.prefetch[0], false);
+	assert.equal('referrer_policy' in output.prerender[0], false);
+	assert.equal(output.prefetch[0].urls[0], proxy('/assets/next.html'));
+});

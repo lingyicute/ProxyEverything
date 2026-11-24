@@ -2720,7 +2720,9 @@ const rewriteSpeculationRules = capRewriteGrowth((account, text, baseUrl, worker
 		const rules = spec[key];
 		if (!Array.isArray(rules)) continue;
 		for (const rule of rules) {
-			if (rule && Array.isArray(rule.urls)) {
+			if (!rule || typeof rule !== 'object') continue;
+			delete rule.referrer_policy;
+			if (Array.isArray(rule.urls)) {
 				const ruleBase = rule.relative_to === 'document' ? docUrl : baseUrl;
 				rule.urls = rule.urls.map(u => typeof u === 'string' ? account(u.length, rewriteUrl(u, ruleBase, workerOrigin, true)) : u);
 			}
