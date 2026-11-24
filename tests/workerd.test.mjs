@@ -28,6 +28,10 @@ export default {
     if (url.pathname === '/style.css') {
       return new Response('a{background:url(pic.png)}', { headers: { 'Content-Type': 'text/css', 'Content-Encoding': 'gzip' } });
     }
+    if (url.pathname === '/conditional.css') {
+      if (request.headers.has('If-None-Match')) return new Response(null, { status: 304, headers: { ETag: '"source"' } });
+      return new Response('a{background:url(pic.png)}', { headers: { 'Content-Type': 'text/css', ETag: '"source"' } });
+    }
     if (url.pathname === '/cookies/set') {
       const headers = new Headers();
       headers.append('Set-Cookie', 'sid=root; Path=/');
@@ -103,6 +107,11 @@ test('real Workerd: HTML, compressed HTTP, URL encoding and WebSocket', {
 	assert.equal(await css.text(), `a{background:url("${proxy}/pic.png")}`);
 	const path = await runtime.dispatchFetch(proxy + '/asset/a%2Fb?x=1');
 	assert.equal(await path.text(), '/asset/a%2Fb?x=1');
+
+	const revalidated = await runtime.dispatchFetch(proxy + '/conditional.css', { headers: { 'If-None-Match': '"source"' } });
+	assert.equal(revalidated.status, 200);
+	assert.equal(revalidated.headers.get('ETag'), null);
+	assert.equal(await revalidated.text(), `a{background:url("${proxy}/pic.png")}`);
 
 	const cookieResponse = await runtime.dispatchFetch(proxy + '/cookies/set');
 	const setCookies = cookieResponse.headers.getSetCookie();

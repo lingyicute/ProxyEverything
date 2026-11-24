@@ -1270,6 +1270,15 @@ function buildResponse(upstream, request, ck, baseUrl) {
 
 function isCacheableMethod(m) { return m === 'GET' || m === 'HEAD'; }
 
+/** 确认重新取到的未变换表示仍是 304 所验证的同一版本。 */
+function sameRevalidationIdentity(notModified, current) {
+	const oldTag = notModified.headers.get('ETag');
+	const newTag = current.headers.get('ETag');
+	if (oldTag || newTag) return Boolean(oldTag && oldTag === newTag);
+	const oldTime = notModified.headers.get('Last-Modified');
+	return Boolean(oldTime && oldTime === current.headers.get('Last-Modified'));
+}
+
 /**
  * 代理把不同会话映射到同一 URL；有凭证或 Set-Cookie 时不允许共享缓存。
  * 浏览器会把代理域下所有站点的 Cookie 一并发来，只有属于当前目标来源、真正回源的那部分才算凭证；
@@ -3444,8 +3453,9 @@ Disallow: /
 		ck.hasCookie = fwdHeaders.has('cookie');
 
 		let upstream;
+		let transformedWildcard304 = false;
 		try {
-			upstream = await fetch(fetchUrl, {
+			const options = {
 				method: request.method,
 				signal: request.signal,
 				headers: fwdHeaders,
@@ -3453,7 +3463,44 @@ Disallow: /
 				redirect: 'manual',
 				// 响应的 no-store 无法阻止 fetch 先命中 Cloudflare 的上游缓存。
 				cache: ck.hasCookie || fwdHeaders.has('authorization') ? 'no-store' : undefined,
-			});
+			};
+			upstream = await fetch(fetchUrl, options);
+			// 源站的验证器描述原文，不是代理转换后的表示。304 通常不带 Content-Type，
+			// 因此无条件重取以判断是否会转换；未变换且版本未改变时仍返回原来的 304。
+			if (upstream.status === 304 && isCacheableMethod(request.method) &&
+				(fwdHeaders.has('If-None-Match') || fwdHeaders.has('If-Modified-Since')) &&
+				!hasNoTransform(request.headers.get('Cache-Control')) && !hasNoTransform(upstream.headers.get('Cache-Control'))) {
+				const retryHeaders = new Headers(fwdHeaders);
+				retryHeaders.delete('If-None-Match');
+				retryHeaders.delete('If-Modified-Since');
+				let current = await fetch(fetchUrl, { ...options, headers: retryHeaders });
+				if (current.status === 304) return errorPage(); // 没有验证条件的 304 无法安全使用。
+				const transforms = current.status === 200 && Boolean(transformKind(current.headers, request));
+				const wildcard = fwdHeaders.get('If-None-Match')?.trim() === '*';
+				if (current.status === 200 && (wildcard || (!transforms && !current.headers.has('Set-Cookie') && sameRevalidationIdentity(upstream, current)))) {
+					if (current.body) current.body.cancel().catch(() => {});
+					// 通配条件只检查资源是否存在；即使不发送正文也不能丢掉重取产生的 Cookie。
+					if (wildcard && current.headers.has('Set-Cookie')) {
+						const headers = new Headers(upstream.headers);
+						const cookies = typeof current.headers.getSetCookie === 'function' ? current.headers.getSetCookie()
+							: typeof current.headers.getAll === 'function' ? current.headers.getAll('Set-Cookie') : [];
+						for (const cookie of cookies) headers.append('Set-Cookie', cookie);
+						upstream = new Response(null, { status: 304, statusText: upstream.statusText, headers });
+					}
+					transformedWildcard304 = transforms && wildcard;
+				} else {
+					// 首次 304 的 Set-Cookie 同样有效，不能因为改用第二个响应而丢掉。
+					if (upstream.headers.has('Set-Cookie')) {
+						const list = h => typeof h.getSetCookie === 'function' ? h.getSetCookie()
+							: typeof h.getAll === 'function' ? h.getAll('Set-Cookie') : [];
+						const headers = new Headers(current.headers);
+						headers.delete('Set-Cookie');
+						for (const cookie of [...list(upstream.headers), ...list(current.headers)]) headers.append('Set-Cookie', cookie);
+						current = new Response(current.body, { status: current.status, statusText: current.statusText, headers });
+					}
+					upstream = current;
+				}
+			}
 		} catch {
 			return errorPage();
 		}
@@ -3501,7 +3548,7 @@ Disallow: /
 			const declaredLength = /^\d+$/.test(rawLength) ? Number(rawLength) : NaN;
 			const passthrough = kind !== null && kind !== 'html' && request.method === 'HEAD' &&
 				declaredLength > MAX_TRANSFORM_BYTES && contentCoding(upstream.headers) === 'identity';
-			if (kind && !passthrough) {
+			if ((kind && !passthrough) || transformedWildcard304) {
 				stripTransformedHeaders(resp.headers);
 				// 304 不重复声明媒体类型。HEAD 必须保留它：HTML 总会流式改写为 UTF-8；
 				// 其它类型的 charset 取决于正文大小是否触发透传，只保留不含参数的媒体类型。
