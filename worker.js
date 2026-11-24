@@ -1855,7 +1855,23 @@ function rwForm(f,sub){
     }
   }catch(e){}
 }
-document.addEventListener('submit',function(ev){rwForm(ev.target,ev.submitter);},true);
+function onSubmitEv(ev){rwForm(ev.target,ev.submitter);}
+document.addEventListener('submit',onSubmitEv,true);
+if(window.Element&&Element.prototype&&Element.prototype.attachShadow){
+  var oAS=Element.prototype.attachShadow;
+  Element.prototype.attachShadow=function(){
+    var sr=oAS.apply(this,arguments);
+    try{
+      if(sr&&sr.addEventListener){
+        sr.addEventListener('submit',onSubmitEv,true);
+        sr.addEventListener('click',rwLinkEv,true);
+        sr.addEventListener('auxclick',rwLinkEv,true);
+        sr.addEventListener('contextmenu',rwLinkEv,true);
+      }
+    }catch(e){}
+    return sr;
+  };
+}
 if(window.HTMLFormElement&&HTMLFormElement.prototype){
   var oSub=HTMLFormElement.prototype.submit;
   if(oSub)HTMLFormElement.prototype.submit=function(){rwForm(this,null);return oSub.apply(this,arguments);};

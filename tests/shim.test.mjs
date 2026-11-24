@@ -567,3 +567,32 @@ test('shim strips userinfo when normalizing already-proxied WebSocket URLs', () 
 		`wss://proxy.example/~${encoded}/live`
 	);
 });
+
+test('attachShadow rewrites submitted forms and clicked links inside shadow roots', () => {
+	const shadowListeners = {};
+	const shadowRoot = { addEventListener(type, fn) { shadowListeners[type] = fn; } };
+	class ShadowElement {
+		constructor(tag) { this.tagName = tag.toUpperCase(); this.attrs = new Map(); }
+		getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
+		setAttribute(name, value) { this.attrs.set(name, String(value)); }
+		removeAttribute(name) { this.attrs.delete(name); }
+		attachShadow() { return shadowRoot; }
+	}
+	const { ctx } = createBrowser({ Element: ShadowElement });
+	const host = new ctx.Element('div');
+	assert.equal(host.attachShadow({ mode: 'closed' }), shadowRoot);
+
+	const form = new ctx.Element('form');
+	form.attrs.set('action', 'https://other.example/login');
+	const submitter = new ctx.Element('button');
+	submitter.attrs.set('formaction', 'https://other.example/alt');
+	shadowListeners.submit({ target: form, submitter });
+	assert.equal(form.getAttribute('action'), origin + '/~' + encodeURIComponent('https://other.example') + '/login');
+	assert.equal(submitter.getAttribute('formaction'), origin + '/~' + encodeURIComponent('https://other.example') + '/alt');
+
+	const link = new ctx.Element('a');
+	link.attrs.set('href', 'https://other.example/closed');
+	link.matches = selector => selector === 'a,area';
+	shadowListeners.click({ target: link, composedPath() { return [link]; } });
+	assert.equal(link.getAttribute('href'), origin + '/~' + encodeURIComponent('https://other.example') + '/closed');
+});
