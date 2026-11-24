@@ -491,3 +491,10 @@ test('shim coerces non-string URL objects, WebSocket empty base, and null attrib
 	img.setAttribute('src', null);
 	assert.equal(img.getAttribute('src'), proxy('/sub/null'));
 });
+
+test('history.pushState and replaceState throw SecurityError on invalid URLs', () => {
+	const { ctx } = createBrowser({ DOMException, history: { pushState() {}, replaceState() {} } });
+	for (const method of ['pushState', 'replaceState']) {
+		assert.throws(() => ctx.history[method](null, '', 'https://[invalid'), { name: 'SecurityError' }, method);
+	}
+});

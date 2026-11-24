@@ -1486,7 +1486,8 @@ if(WS)['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k,i){try{WS[k]=i
 function wrapHistory(fn){return function(st,t,u){
   if(u!=null){
     var next=rwNavigation(String(u),true);
-    var link=new URL(next,location.href);
+    var link;
+    try{link=new URL(next,location.href);}catch(e){throw new DOMException('Invalid history URL','SecurityError');}
     if(isSelfHost(link)){
       var dec=isProxiedPath(link.pathname)?decodeProxyPath(link.pathname):'';
       var dest=null;
