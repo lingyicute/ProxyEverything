@@ -1457,7 +1457,8 @@ function wrapHistory(fn){return function(st,t,u){
       var dec=isProxiedPath(link.pathname)?decodeProxyPath(link.pathname):'';
       var dest=null;
       if(dec){try{dest=new URL(dec);var dh=dest.hostname.toLowerCase().replace(/\\.+$/,'');if(dh)dest.hostname=dh;}catch(e){dest=null;}}
-      if(!dest||dest.origin!==new URL(currentTarget()).origin)throw new DOMException('History URL has a different target origin','SecurityError');
+      var curTarget=new URL(currentTarget());
+      if(!dest||dest.protocol!==curTarget.protocol||dest.origin!==curTarget.origin)throw new DOMException('History URL has a different target origin','SecurityError');
     }
     arguments[2]=next;
   }

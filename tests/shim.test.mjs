@@ -382,6 +382,7 @@ test('history state updates resolve empty URLs against base and block dot-segmen
 	ctx.history.pushState(null, '', '/~https%3A%2F%2Fexample.com/.\t./~https%3A%2F%2Fother.example/inside');
 	assert.equal(calls[5], '/~https%3A%2F%2Fexample.com/~https%3A%2F%2Fother.example/inside');
 	assert.throws(() => ctx.history.pushState(null, '', '/~https%3A%2F%2Fother.example/x'), { name: 'SecurityError' });
+	assert.throws(() => ctx.history.pushState(null, '', 'wss://example.com/x'), { name: 'SecurityError' });
 });
 
 test('shim ignores foreign base elements and freezes at the first HTML base with href', () => {
