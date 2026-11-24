@@ -2152,7 +2152,7 @@ function getHtmlAttribute(el, name, isXml = false) {
 
 // XHTML 的属性值按 XML 规范化，制表符和换行必须写成字符引用才能保留。
 function setHtmlAttribute(el, name, value, isXml = false) {
-	el.setAttribute(name, isXml ? escapeXmlAttr(value) : escapeHtml(value), isXml);
+	el.setAttribute(name, isXml ? escapeXmlAttr(value) : escapeHtml(value));
 }
 
 const HANDLERS = {
