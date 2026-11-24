@@ -696,7 +696,7 @@ function rewriteRefreshContent(content, baseUrl, workerOrigin, resolveBase = fal
 	const cleaned = trimUrlSpace(url);
 	if (!cleaned && !(resolveBase && (quoted || urlPrefix))) return raw;
 	const rewritten = rewriteUrl(cleaned, baseUrl, workerOrigin, resolveBase);
-	return !cleaned && rewritten === cleaned ? raw : prefix + 'url=' + rewritten;
+	return rewritten === cleaned ? raw : prefix + 'url=' + rewritten;
 }
 
 // Cookie 命名空间（不提供浏览器安全隔离）

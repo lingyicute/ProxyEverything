@@ -721,3 +721,14 @@ test('policy blocks home.arpa special-use local hostnames', () => {
 	}
 	assert.ok(getRootHtml().includes('home.arpa'));
 });
+
+test('refresh directives keep original text when the URL does not change', () => {
+	for (const value of [
+		'0; url="mailto:a@example.com"',
+		"5; url='#sec'",
+		'0; url="javascript:void(0)"',
+		`0; url="${proxy('https://example.com/next')}"`,
+	]) {
+		assert.equal(rewriteRefreshContent(value, base, origin), value);
+	}
+});
