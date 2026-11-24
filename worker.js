@@ -2316,8 +2316,9 @@ function transformHtml(response, baseUrl, workerOrigin, ck, sourceCharset = null
 	rewriter.on('script', bufferedTextHandler(
 		(text, kind) => rawText(text, part => kind === 'importmap'
 			? rewriteImportMap(part, baseHref, workerOrigin)
+			// 内联规则集的基地址和 relative_to: "document" 都是文档基地址（受 <base> 影响），不是文档地址。
 			: kind === 'speculationrules'
-				? rewriteSpeculationRules(part, baseHref, workerOrigin, baseUrl)
+				? rewriteSpeculationRules(part, baseHref, workerOrigin, baseHref)
 				: rewriteJsModuleSpecifiers(part, baseHref, workerOrigin)),
 		el => {
 			if (el.hasAttribute('src') || el.hasAttribute('href') || el.hasAttribute('xlink:href')) return null;

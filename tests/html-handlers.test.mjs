@@ -220,3 +220,15 @@ test('HTML base unwraps already-proxied and proxy-host URLs to their target base
 		assert.equal(link.getAttribute('href'), expectedLink, href);
 	}
 });
+
+test('inline speculation rules resolve relative_to document against the HTML base', () => {
+	const handlers = collectHandlers();
+	handlers.base[0].element(element('base', { href: '/assets/' }));
+	const script = element('script', { type: 'speculationrules' });
+	for (const h of handlers.script) h.element?.(script);
+	let output = null;
+	const rules = { prefetch: [{ urls: ['a.html'] }, { relative_to: 'document', urls: ['b.html'] }] };
+	const chunk = { text: JSON.stringify(rules), lastInTextNode: true, replace(text) { output = text; }, remove() {} };
+	for (const h of handlers.script) h.text?.(chunk);
+	assert.deepEqual(JSON.parse(output).prefetch.map(rule => rule.urls[0]), [proxy('/assets/a.html'), proxy('/assets/b.html')]);
+});
