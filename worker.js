@@ -2615,8 +2615,11 @@ function rewriteModuleSpecifier(specifier, baseUrl, workerOrigin) {
 const rewriteJsModuleSpecifiers = capRewriteGrowth((account, js, baseUrl, workerOrigin) => {
 	const source = String(js);
 	if (!source.includes('import') && !source.includes('export')) return source;
+	// 内联模块或重复 BOM 可能携带前导 U+FEFF，es-module-lexer 不将其视作空白。
+	let offset = 0;
+	while (source.charCodeAt(offset) === 0xfeff) offset++;
 	let imports;
-	try { [imports] = parseModuleImports(source); } catch { return source; }
+	try { [imports] = parseModuleImports(offset ? source.slice(offset) : source); } catch { return source; }
 	const parts = [];
 	let cursor = 0;
 	for (const item of imports) {
@@ -2625,8 +2628,8 @@ const rewriteJsModuleSpecifiers = capRewriteGrowth((account, js, baseUrl, worker
 		const rewritten = rewriteModuleSpecifier(spec, baseUrl, workerOrigin);
 		if (rewritten === spec) continue;
 		// 静态说明符 s/e 不含引号；动态说明符 s/e 包含整个字面量。
-		const start = item.d === -1 ? item.s - 1 : item.s;
-		const end = item.d === -1 ? item.e + 1 : item.e;
+		const start = offset + (item.d === -1 ? item.s - 1 : item.s);
+		const end = offset + (item.d === -1 ? item.e + 1 : item.e);
 		parts.push(source.slice(cursor, start), account(end - start, stringifyInlineJson(rewritten)));
 		cursor = end;
 	}

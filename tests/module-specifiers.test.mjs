@@ -31,6 +31,10 @@ test('module imports resolve absolute HTTP specifiers without a base URL', () =>
 		`import "${proxy('https://cdn.example/four.js')}";`,
 	].join('\n');
 	assert.equal(rewriteJsModuleSpecifiers(input, base, origin), expected);
+	assert.equal(
+		rewriteJsModuleSpecifiers('\uFEFFimport "./local.js"; import("./lazy.js");', base, origin),
+		`\uFEFFimport "${proxy('https://site.example/app/local.js')}"; import("${proxy('https://site.example/app/lazy.js')}");`
+	);
 });
 
 test('import map keys and values use module resolution, not ordinary relative URL resolution', () => {
