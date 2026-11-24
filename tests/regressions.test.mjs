@@ -160,6 +160,9 @@ test('homepage submit preserves percent-encoded plain URLs and rejects ws://', (
 	assert.equal(submit('https://example.com/files/a%2Fb?x=1').href, '/~https%3A%2F%2Fexample.com/files/a%2Fb?x=1');
 	assert.equal(submit(origin + '/https%3A%2F%2Fen.wikipedia.org/wiki/C%2523').href, '/~https%3A%2F%2Fen.wikipedia.org/wiki/C%23');
 	assert.equal(submit(origin + '/~https%3A%2F%2Fexample.com/../other.example/secret').href, '/~https%3A%2F%2Fexample.com/other.example/secret');
+	assert.equal(submit(origin + '/~https%3A%2F%2Fexample.com/search?q=1#top').href, '/~https%3A%2F%2Fexample.com/search?q=1#top');
+	assert.equal(submit(origin + '/~https%3A%2F%2Fexample.com?q=1').href, '/~https%3A%2F%2Fexample.com/?q=1');
+	assert.equal(submit(origin + '/~https%3A%2F%2Fexample.com/search?k=a\\b').href, '/~https%3A%2F%2Fexample.com/search?k=a\\b');
 	const wsRes = submit('ws://example.com/ws');
 	assert.equal(wsRes.href, origin + '/');
 	assert.equal(wsRes.snack, '仅支持 http:// 或 https:// 网址');

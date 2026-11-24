@@ -3890,10 +3890,11 @@ ${browserPathHelpers()}
     if(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})/i.test(v)){
       try{
         var u0=new URL(v,location.href);
-        var rawSelf=v.replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
+        var cut0=v.search(/[?#]/);
+        var rawSelf=(cut0<0?v:v.slice(0,cut0)).replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
         if(normalizeHostname(u0.hostname)===selfH&&u0.port===location.port&&
            isProxiedPath(rawSelf)){
-          v=rawSelf+urlSuffix(u0);
+          v=rawSelf+(cut0<0?'':v.slice(cut0));
         }
       }catch(_){}
     }
