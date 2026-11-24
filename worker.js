@@ -3346,7 +3346,7 @@ Disallow: /
 			const nextLocation = resp.headers.get('Location');
 			if (nextLocation && fwdHeaders.has('Authorization')) {
 				const next = parseTarget(new URL(nextLocation, workerOrigin));
-				if (!next || next.origin !== targetUrl.origin) {
+				if (!next || next.protocol !== targetUrl.protocol || next.origin !== targetUrl.origin) {
 					return new Response('不能跨目标来源重定向带 Authorization 的请求', {
 						status: 502, headers: { 'Cache-Control': 'no-store' },
 					});

@@ -189,6 +189,7 @@ test('authenticated redirects stay within the original target origin', async t =
 		['/next', true, 307], ['https://cdn.example/next', false, 307],
 		['https://cdn.example/next', true, 502], [proxy('https://cdn.example/next'), true, 502],
 		['http://example.com/next', true, 502], ['https://example.com:8443/next', true, 502],
+		[origin + '/~wss%3A%2F%2Fexample.com/next', true, 502],
 	]) {
 		location = next;
 		const r = await worker.fetch(new Request(proxy(target), {
