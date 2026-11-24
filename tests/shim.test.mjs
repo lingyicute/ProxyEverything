@@ -549,3 +549,16 @@ test('link events traverse shadow boundaries and prefer the nearest composed-pat
 		assert.equal(outer.getAttribute('href'), origin + '/~' + encodeURIComponent('https://other.example') + '/outer');
 	}
 });
+
+test('shim strips userinfo when normalizing already-proxied WebSocket URLs', () => {
+	const { ctx } = createBrowser();
+	const encoded = encodeURIComponent('wss://example.com');
+	assert.equal(
+		ctx.window.__PE__.rp(`wss://user:pass@proxy.example/~${encoded}/live?x=1`),
+		`wss://proxy.example/~${encoded}/live?x=1`
+	);
+	assert.equal(
+		ctx.window.__PE__.rp(`wss://user:pass@proxy.example./~${encoded}/live`),
+		`wss://proxy.example/~${encoded}/live`
+	);
+});

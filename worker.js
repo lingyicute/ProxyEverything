@@ -1391,16 +1391,12 @@ function normProxied(raw,keepOrigin,parsed){
   var rawPath=(cut<0?clean:clean.slice(0,cut)).replace(/^(?:[a-z][a-z0-9+.-]*:[\\/\\\\]*|[\\/\\\\]{2,})[^\\/\\\\?#]*/i,'').replace(/\\\\/g,'/');
   var tu=decodeProxiedTarget(rawPath,cut<0?'':clean.slice(cut));
   if(!tu)return null;
+  var wsHost=location.host||(location.hostname?location.hostname+(location.port?':'+location.port:''):WOU.host);
   if(!/\\/(?:\\.|%2e){2}(?:\\/|$)/i.test(rawPath)&&isProxiedPath(pu.pathname)){
     if(!keepOrigin)return pu.pathname+urlSuffix(pu);
-    if(isWs){
-      var canonH=location.hostname||WOU.hostname;
-      if(canonH&&pu.hostname!==canonH)pu.hostname=canonH;
-      return pu.href;
-    }
-    return WO+pu.pathname+urlSuffix(pu);
+    return (isWs?pu.protocol+'//'+wsHost:WO)+pu.pathname+urlSuffix(pu);
   }
-  var prefix=keepOrigin?(isWs?pu.protocol+'//'+(location.host||WOU.host):WO):'';
+  var prefix=keepOrigin?(isWs?pu.protocol+'//'+wsHost:WO):'';
   return prefix+encodeProxyPath(tu);
 }
 function rp(v){
