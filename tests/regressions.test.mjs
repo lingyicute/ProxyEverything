@@ -18,6 +18,7 @@ const {
 	decodeProxiedTarget,
 	decodeProxyPath,
 	resolveTargetBaseUrl,
+	targetPolicyError,
 	rewriteUrl,
 	sniffHtmlCharset,
 	sniffTextCharset,
@@ -27,7 +28,7 @@ const {
 export {
 	getRootHtml, getShimScript, MD3_JS, quoteCssString, rewriteCss,
 	rewriteJsModuleSpecifiers, rewriteRefreshContent, rewriteStyleAttr,
-	decodeProxiedTarget, decodeProxyPath, resolveTargetBaseUrl, rewriteSvg, rewriteXmlText, rewriteUrl, sniffHtmlCharset, sniffTextCharset, stringifyInlineJson
+	decodeProxiedTarget, decodeProxyPath, resolveTargetBaseUrl, targetPolicyError, rewriteSvg, rewriteXmlText, rewriteUrl, sniffHtmlCharset, sniffTextCharset, stringifyInlineJson
 };`).toString('base64')
 );
 
@@ -703,4 +704,12 @@ test('decoded proxy origins reject embedded userinfo', () => {
 	assert.equal(decodeProxiedTarget(tilde), null);
 	assert.equal(decodeProxiedTarget(legacy), null);
 	assert.equal(resolveTargetBaseUrl(tilde, base, origin, true), 'https://example.com' + tilde);
+});
+
+test('ALLOWED_TARGET_ORIGINS rejects leading or consecutive dot hostnames', () => {
+	const target = new URL('https://example.com/');
+	for (const bad of ['https://example.com..', 'https://.example.com', 'https://a..b.example']) {
+		assert.equal(targetPolicyError(target, { ALLOWED_TARGET_ORIGINS: bad })?.status, 503, bad);
+	}
+	assert.equal(targetPolicyError(target, { ALLOWED_TARGET_ORIGINS: 'https://example.com.' }), null);
 });

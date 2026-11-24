@@ -3085,7 +3085,8 @@ function targetPolicyError(targetUrl, env) {
 			if (!/^https?:\/\/[^\s\\/@?#*\x00-\x1f\x7f]+\/?$/i.test(entry)) throw new Error();
 			const u = new URL(entry);
 			if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password ||
-				u.pathname !== '/' || u.search || u.hash) throw new Error();
+				u.pathname !== '/' || u.search || u.hash ||
+				!u.hostname || u.hostname.startsWith('.') || u.hostname.includes('..')) throw new Error();
 			u.hostname = normalizeHostname(u.hostname);
 			return u.origin;
 		});
