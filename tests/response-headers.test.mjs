@@ -418,3 +418,16 @@ test('strips additional client IP forwarding request headers', async t => {
 	for (const name of stripped) assert.equal(seen.get(name), null, name);
 	assert.equal(seen.get('x-keep'), 'ok');
 });
+
+test('strips X-Url-Scheme forwarding request header', async t => {
+	let seen;
+	t.mock.method(globalThis, 'fetch', async (_, init) => {
+		seen = new Headers(init.headers);
+		return new Response('ok');
+	});
+	await worker.fetch(new Request(proxy('https://example.com/'), {
+		headers: { 'x-url-scheme': 'http', 'x-keep': 'ok' },
+	}), { ALLOWED_TARGET_ORIGINS: 'https://example.com' });
+	assert.equal(seen.get('x-url-scheme'), null);
+	assert.equal(seen.get('x-keep'), 'ok');
+});

@@ -3111,7 +3111,7 @@ function documentBase(targetUrl) {
 const STRIP_FORWARDED_HEADERS = new Set([
 	'x-real-ip', 'true-client-ip', 'forwarded',
 	'x-original-host', 'x-host', 'x-http-host-override', 'x-original-url', 'x-rewrite-url', 'x-client-ip', 'via',
-	'cdn-loop', 'x-real-port', 'x-scheme', 'x-forwarded-ssl', 'front-end-https', 'fastly-client-ip',
+	'cdn-loop', 'x-real-port', 'x-scheme', 'x-url-scheme', 'x-forwarded-ssl', 'front-end-https', 'fastly-client-ip',
 	'client-ip', 'x-cluster-client-ip', 'x-originating-ip', 'x-remote-ip', 'x-remote-addr',
 	'fly-client-ip', 'x-envoy-external-address',
 	'available-dictionary', 'dictionary-id',
