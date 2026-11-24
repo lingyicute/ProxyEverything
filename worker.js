@@ -2934,10 +2934,10 @@ const rewriteJsonUrls = capRewriteGrowth((account, text, baseUrl, workerOrigin) 
 	// id 按规范相对 start_url 的来源解析，而非 manifest 地址：否则 "?pwa"、"app" 这类 id 会拼到 manifest 所在路径上。
 	if (typeof manifest.id === 'string' && manifest.id !== '') {
 		let idBase = new URL('/', baseUrl).href;
-		try {
-			const start = new URL(typeof manifest.start_url === 'string' ? manifest.start_url : '', baseUrl);
-			if (start.protocol === 'http:' || start.protocol === 'https:') idBase = start.origin + '/';
-		} catch {}
+		if (typeof manifest.start_url === 'string') {
+			const start = resolveTargetBaseUrl(manifest.start_url, baseUrl, workerOrigin, true);
+			if (start) idBase = new URL(start).origin + '/';
+		}
 		manifest.id = account(manifest.id.length, rewriteUrl(manifest.id, idBase, workerOrigin, true));
 	}
 	fields(manifest, ['start_url', 'scope']);
