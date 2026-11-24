@@ -166,6 +166,7 @@ test('homepage submit preserves percent-encoded plain URLs and rejects ws://', (
 	const wsRes = submit('ws://example.com/ws');
 	assert.equal(wsRes.href, origin + '/');
 	assert.equal(wsRes.snack, '仅支持 http:// 或 https:// 网址');
+	assert.equal(submit('ftp://proxy.example/~https%3A%2F%2Fexample.com/file').snack, '仅支持 http:// 或 https:// 网址');
 });
 
 test('Referer lookups enforce ALLOWED_TARGET_ORIGINS and rewrite Sec-Fetch-Site', async () => {
