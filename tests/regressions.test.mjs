@@ -167,6 +167,7 @@ test('homepage submit preserves percent-encoded plain URLs and rejects ws://', (
 	assert.equal(submit('https://en.wikipedia.org/wiki/C%23').href, '/~https%3A%2F%2Fen.wikipedia.org/wiki/C%23');
 	assert.equal(submit('https://example.com/files/a%2Fb?x=1').href, '/~https%3A%2F%2Fexample.com/files/a%2Fb?x=1');
 	assert.equal(submit(origin + '/https%3A%2F%2Fen.wikipedia.org/wiki/C%2523').href, '/~https%3A%2F%2Fen.wikipedia.org/wiki/C%23');
+	assert.equal(submit(origin + '/https%3A%2F%2Fexample.com%2Fp%3Fa%3D1?#top').href, '/~https%3A%2F%2Fexample.com/p?a=1#top');
 	assert.equal(submit(origin + '/~https%3A%2F%2Fexample.com/../other.example/secret').href, '/~https%3A%2F%2Fexample.com/other.example/secret');
 	assert.equal(submit(origin + '/~https%3A%2F%2Fexample.com/search?q=1#top').href, '/~https%3A%2F%2Fexample.com/search?q=1#top');
 	assert.equal(submit(origin + '/~https%3A%2F%2Fexample.com?q=1').href, '/~https%3A%2F%2Fexample.com/?q=1');
