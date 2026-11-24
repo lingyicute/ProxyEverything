@@ -374,3 +374,18 @@ test('strips Use-As-Dictionary origin-wide compression dictionary header', async
 	}, 'ok');
 	assert.equal(r.headers.get('use-as-dictionary'), null);
 });
+
+test('strips Available-Dictionary and Dictionary-ID request headers before forwarding', async t => {
+	let seen;
+	t.mock.method(globalThis, 'fetch', async (_, init) => {
+		seen = new Headers(init.headers);
+		return new Response('ok');
+	});
+	const r = await worker.fetch(new Request(proxy('https://example.com/app.js'), {
+		headers: { 'available-dictionary': ':abc:', 'dictionary-id': '"dict"', 'x-keep': '1' },
+	}), { ALLOWED_TARGET_ORIGINS: 'https://example.com' });
+	assert.equal(r.status, 200);
+	assert.equal(seen.get('available-dictionary'), null);
+	assert.equal(seen.get('dictionary-id'), null);
+	assert.equal(seen.get('x-keep'), '1');
+});

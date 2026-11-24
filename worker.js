@@ -3108,6 +3108,7 @@ const STRIP_FORWARDED_HEADERS = new Set([
 	'x-real-ip', 'true-client-ip', 'forwarded',
 	'x-original-host', 'x-host', 'x-http-host-override', 'x-original-url', 'x-rewrite-url', 'x-client-ip', 'via',
 	'cdn-loop', 'x-real-port', 'x-scheme', 'x-forwarded-ssl', 'front-end-https', 'fastly-client-ip',
+	'available-dictionary', 'dictionary-id',
 ]);
 
 /** 从 Referer 还原发起请求的目标页面 URL（ws/wss 归一为 http/https）；缺失或不是合法代理地址时返回 null */
