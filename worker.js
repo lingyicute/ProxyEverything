@@ -2285,7 +2285,7 @@ function transformHtml(response, baseUrl, workerOrigin, ck, sourceCharset = null
 	// template 内容不是活动文档的一部分；嵌套模板也不能改变文档基地址。
 	rewriter.on('template', {
 		element(el) {
-			if (el.namespaceURI !== htmlNamespace) return;
+			if (el.namespaceURI !== htmlNamespace || (isXml && el.selfClosing)) return;
 			templateDepth++;
 			el.onEndTag(() => { templateDepth--; });
 		},

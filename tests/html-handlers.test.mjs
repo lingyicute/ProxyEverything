@@ -232,3 +232,15 @@ test('inline speculation rules resolve relative_to document against the HTML bas
 	for (const h of handlers.script) h.text?.(chunk);
 	assert.deepEqual(JSON.parse(output).prefetch.map(rule => rule.urls[0]), [proxy('/assets/a.html'), proxy('/assets/b.html')]);
 });
+
+test('XHTML ignores self-closing template when tracking template depth', () => {
+	const handlers = collectHandlers('application/xhtml+xml');
+	const tpl = Object.assign(element('template', {}), { selfClosing: true });
+	handlers.template[0].element(tpl);
+	const baseEl = element('base', { href: '/assets/' });
+	handlers.base[0].element(baseEl);
+	assert.equal(baseEl.getAttribute('data-pe-base'), 'https://example.com/assets/');
+	const link = element('a', { href: 'app.js' });
+	handlers.a[0].element(link);
+	assert.equal(link.getAttribute('href'), proxy('/assets/app.js'));
+});
