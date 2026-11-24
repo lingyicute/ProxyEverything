@@ -3490,7 +3490,11 @@ Disallow: /
 				retryHeaders.delete('If-None-Match');
 				retryHeaders.delete('If-Modified-Since');
 				let current = await fetch(fetchUrl, { ...options, headers: retryHeaders });
-				if (current.status === 304) return errorPage(); // 没有验证条件的 304 无法安全使用。
+				if (current.status === 304 || current.status < 200 || current.status > 599) {
+					if (current.body) current.body.cancel().catch(() => {});
+					if (upstream.body) upstream.body.cancel().catch(() => {});
+					return errorPage(); // 没有验证条件的 304 或非法状态码无法安全使用。
+				}
 				const transforms = current.status === 200 && Boolean(transformKind(current.headers, request));
 				const wildcard = fwdHeaders.get('If-None-Match')?.trim() === '*';
 				if (current.status === 200 && (wildcard || (!transforms && !current.headers.has('Set-Cookie') && sameRevalidationIdentity(upstream, current)))) {
@@ -3505,6 +3509,7 @@ Disallow: /
 					}
 					transformedWildcard304 = transforms && wildcard;
 				} else {
+					if (upstream.body) upstream.body.cancel().catch(() => {});
 					// 首次 304 的 Set-Cookie 同样有效，不能因为改用第二个响应而丢掉。
 					if (upstream.headers.has('Set-Cookie')) {
 						const list = h => typeof h.getSetCookie === 'function' ? h.getSetCookie()

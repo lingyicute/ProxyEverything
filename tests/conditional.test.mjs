@@ -106,3 +106,16 @@ test('cookies from the original 304 and the replacement 200 are both retained', 
 	assert.equal(r.headers.get('Cache-Control'), 'no-store');
 	assert.equal(await r.text(), 'a{}');
 });
+
+test('failed or out-of-range 304 retries cancel their response body before returning 502', async t => {
+	let canceled = 0;
+	const stream = () => new ReadableStream({ cancel() { canceled++; } });
+	fixtures(t, [
+		notModified({ ETag: '"source"', 'Set-Cookie': 'first=1; Path=/' }),
+		() => ({ status: 999, statusText: 'Custom', headers: new Headers(), body: stream() }),
+	]);
+	const r = await worker.fetch(new Request(proxy, { headers: { 'If-None-Match': '"source"' } }), env);
+	assert.equal(r.status, 502);
+	assert.equal(r.headers.get('Cache-Control'), 'no-store');
+	assert.equal(canceled, 1);
+});
