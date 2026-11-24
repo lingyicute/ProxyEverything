@@ -79,6 +79,14 @@ test('already proxied paths are not double-proxied and clamp dot segments', () =
 		rewriteJsModuleSpecifiers('import "//proxy.example/~https%3A%2F%2Fcdn.example/../~https%3A%2F%2Fother.example/one.js";', base, origin),
 		`import "${origin}/~https%3A%2F%2Fcdn.example/~https%3A%2F%2Fother.example/one.js";`
 	);
+	for (const escape of [
+		`${origin}/foo/../~https%3A%2F%2Fother.example/one.js`,
+		`${origin}/./~https%3A%2F%2Fother.example/one.js`,
+		`${origin}/~https%3A%2F%2F[invalid]/../~https%3A%2F%2Fother.example/one.js`,
+	]) {
+		assert.equal(rewriteJsModuleSpecifiers(`import "${escape}";`, base, origin),
+			`import "${origin}/~https%3A%2F%2Fsite.example/~https%3A%2F%2Fother.example/one.js";`, escape);
+	}
 	const map = { imports: { [path]: `${origin}/~https%3A%2F%2Fcdn.example/../one.js` } };
 	assert.deepEqual(JSON.parse(rewriteImportMap(JSON.stringify(map), base, origin)), {
 		imports: { [path]: origin + path },

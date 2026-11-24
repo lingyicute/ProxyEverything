@@ -2575,13 +2575,15 @@ function rewriteModuleSpecifier(specifier, baseUrl, workerOrigin) {
 		const resolved = isRel ? new URL(specifier, baseUrl) : new URL(specifier);
 		if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return specifier;
 		if (isWorkerHost(resolved, workerOrigin)) {
-			const rawSelfPath = clean
+			const cut = clean.search(/[?#]/);
+			const rawSelfPath = (cut < 0 ? clean : clean.slice(0, cut))
 				.replace(/^(?:[a-z][a-z0-9+.-]*:[\/\\]*|[\/\\]{2,})[^\/\\?#]*/i, '')
 				.replace(/\\/g, '/');
 			if (isProxiedPath(rawSelfPath)) {
 				const norm = normalizeProxiedUrl(clean, workerOrigin, true, resolved);
 				if (norm) return norm;
 			}
+			return toProxyUrl(new URL(new URL(baseUrl).origin + resolved.pathname + urlSuffix(resolved)).href, workerOrigin);
 		}
 		return rewriteUrl(resolved.href, baseUrl, workerOrigin);
 	} catch {
