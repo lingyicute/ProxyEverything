@@ -961,18 +961,18 @@ function prescanHtmlCharset(text) {
 		if (!scanned) return null;
 		start = scanned.end;
 		if (!meta) continue;
-		let gotPragma = false, needPragma = null, charset = null;
+		let gotPragma = false, needPragma = null, charset;
 		for (const [name, value] of scanned.attrs) {
 			if (name === 'http-equiv' && value.toLowerCase() === 'content-type') gotPragma = true;
-			else if (name === 'content' && charset === null) {
+			else if (name === 'content' && charset === undefined) {
 				const candidate = extractMetaCharset(value);
 				if (candidate) { charset = candidate; needPragma = true; }
-			} else if (name === 'charset' && charset === null) {
-				const candidate = normalizeCharsetLabel(value, true);
-				if (candidate) { charset = candidate; needPragma = false; }
+			} else if (name === 'charset') {
+				charset = normalizeCharsetLabel(value, true);
+				needPragma = false;
 			}
 		}
-		if (needPragma !== null && (!needPragma || gotPragma)) return charset;
+		if (needPragma !== null && (!needPragma || gotPragma) && charset) return charset;
 	}
 	return null;
 }

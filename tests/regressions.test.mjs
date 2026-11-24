@@ -634,11 +634,13 @@ test('dot segments in already-proxied URLs stay clamped within their target orig
 test('HTML meta charset prescan follows WHATWG pragma and attribute precedence rules', async () => {
 	for (const [html, expected] of [
 		['<meta http-equiv="Content-Type" content="charset=gbk">', 'gbk'],
-		['<meta charset="" http-equiv="content-type" content="text/html; charset=gbk">', 'gbk'],
-		['<meta charset="invalid-label" http-equiv="content-type" content="text/html; charset=gbk">', 'gbk'],
+		['<meta charset="" http-equiv="content-type" content="text/html; charset=gbk"><meta charset="big5">', 'big5'],
+		['<meta charset="invalid-label" http-equiv="content-type" content="text/html; charset=gbk"><meta charset="euc-jp">', 'euc-jp'],
+		['<meta http-equiv="content-type" content="text/html; charset=gbk" charset="invalid-label"><meta charset="shift_jis">', 'shift_jis'],
+		['<meta http-equiv="content-type" content="text/html; charset=gbk" charset="shift_jis">', 'shift_jis'],
 		['<meta content="text/html; charset=gbk" http-equiv="Content-Type">', 'gbk'],
 		['<meta content="text/html; charset=gbk"><meta charset="windows-1252">', 'windows-1252'],
-		['<meta content="text/html; charset=gbk" charset="windows-1252"><meta charset="utf-8">', 'utf-8'],
+		['<meta content="text/html; charset=gbk" charset="windows-1252"><meta charset="utf-8">', 'windows-1252'],
 	]) {
 		const sniffed = await sniffHtmlCharset(new Response(html).body);
 		assert.equal(sniffed.charset, expected, html);
