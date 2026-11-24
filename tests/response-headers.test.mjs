@@ -278,6 +278,8 @@ test('redirects to external protocol handlers keep their Location', async t => {
 		['mailto:team@example.com?subject=hi', 'mailto:team@example.com?subject=hi'],
 		['zoommtg://zoom.us/join?confno=1', 'zoommtg://zoom.us/join?confno=1'],
 		['/next', proxy('https://example.com/next')],
+		[origin + '/~https%3A%2F%2Fexample.com/a/../../~https%3A%2F%2Fother.example/x', proxy('https://example.com/~https%3A%2F%2Fother.example/x')],
+		[origin + '/foo/../~https%3A%2F%2Fother.example/x', proxy('https://example.com/~https%3A%2F%2Fother.example/x')],
 		['https://[', null],
 	]) {
 		location = next;

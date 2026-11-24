@@ -139,7 +139,8 @@ function stripResponseHeaders(headers, request, baseUrl) {
 			// mailto:、应用深链等交给浏览器的外部协议处理，与 meta refresh 和链接一致；
 			// 浏览器本身拒绝跟随指向 javascript:、data: 等的重定向。
 			if (['http:', 'https:'].includes(target.protocol)) {
-				headers.set('Location', rewriteUrl(target.href, baseUrl, origin));
+				const raw = isWorkerHost(target, origin) ? location : target.href;
+				headers.set('Location', rewriteUrl(raw, baseUrl, origin, true));
 			}
 		} catch { headers.delete('Location'); }
 	}
