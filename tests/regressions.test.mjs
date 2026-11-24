@@ -15,6 +15,9 @@ const {
 	rewriteRefreshContent,
 	rewriteStyleAttr,
 	rewriteSvg, rewriteXmlText,
+	decodeProxiedTarget,
+	decodeProxyPath,
+	resolveTargetBaseUrl,
 	rewriteUrl,
 	sniffHtmlCharset,
 	sniffTextCharset,
@@ -24,7 +27,7 @@ const {
 export {
 	getRootHtml, getShimScript, MD3_JS, quoteCssString, rewriteCss,
 	rewriteJsModuleSpecifiers, rewriteRefreshContent, rewriteStyleAttr,
-	rewriteSvg, rewriteXmlText, rewriteUrl, sniffHtmlCharset, sniffTextCharset, stringifyInlineJson
+	decodeProxiedTarget, decodeProxyPath, resolveTargetBaseUrl, rewriteSvg, rewriteXmlText, rewriteUrl, sniffHtmlCharset, sniffTextCharset, stringifyInlineJson
 };`).toString('base64')
 );
 
@@ -691,4 +694,13 @@ test('HTML sniffing detects unbommed UTF-16 XML declarations across chunks', asy
 	const other = await sniffHtmlCharset(new Response(Buffer.from([0x3c, 0, 0x3f, 0, 0x20, 0])).body);
 	assert.equal(other.charset, null);
 	await other.body.cancel();
+});
+
+test('decoded proxy origins reject embedded userinfo', () => {
+	const tilde = '/~' + encodeURIComponent('https://user@example.com') + '/page';
+	const legacy = '/' + encodeURIComponent('https://user:pass@example.com/page');
+	assert.equal(decodeProxyPath(tilde), '');
+	assert.equal(decodeProxiedTarget(tilde), null);
+	assert.equal(decodeProxiedTarget(legacy), null);
+	assert.equal(resolveTargetBaseUrl(tilde, base, origin, true), 'https://example.com' + tilde);
 });

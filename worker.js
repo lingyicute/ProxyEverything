@@ -226,7 +226,7 @@ function decodeProxyPath(pathname) {
 	if (!raw.startsWith('~')) return safeDecode(raw);
 	const cut = raw.indexOf('/');
 	const origin = safeDecode(raw.slice(1, cut === -1 ? raw.length : cut));
-	if (!/^(?:https?|wss?):\/\/[^\\/?#\s]+$/i.test(origin)) return '';
+	if (!/^(?:https?|wss?):\/\/[^\\/?#@\s]+$/i.test(origin)) return '';
 	return origin + (cut === -1 ? '/' : raw.slice(cut));
 }
 
@@ -240,7 +240,7 @@ function decodeProxiedTarget(rawPath, suffix = '') {
 	try {
 		const extraQuery = query ? (baseTarget.includes('?') ? (query.length > 1 ? '&' + query.slice(1) : '') : query) : '';
 		const target = new URL(baseTarget + extraQuery + hash);
-		if (!['http:', 'https:', 'ws:', 'wss:'].includes(target.protocol)) return null;
+		if (!['http:', 'https:', 'ws:', 'wss:'].includes(target.protocol) || target.username || target.password) return null;
 		const host = normalizeHostname(target.hostname);
 		if (!host) return null;
 		target.hostname = host;
