@@ -66,6 +66,10 @@ const STRIP_RESPONSE_HEADERS = [
 	'observe-browsing-topics', // 避免代表代理源记录上游的 Topics 观测
 	'supports-loading-mode',
 	'use-as-dictionary',  // 共享压缩字典按代理源持久化，可能跨目标站点生效
+	'attribution-reporting-register-source', // 归因报告注册状态归属整个代理源
+	'attribution-reporting-register-trigger',
+	'attribution-reporting-register-os-source',
+	'attribution-reporting-register-os-trigger',
 ];
 
 // 仅正文变换时移除；透传响应必须保留其表示元数据。

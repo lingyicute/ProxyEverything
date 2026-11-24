@@ -389,3 +389,15 @@ test('strips Available-Dictionary and Dictionary-ID request headers before forwa
 	assert.equal(seen.get('dictionary-id'), null);
 	assert.equal(seen.get('x-keep'), '1');
 });
+
+test('strips Attribution Reporting registration response headers', async () => {
+	const names = [
+		'attribution-reporting-register-source',
+		'attribution-reporting-register-trigger',
+		'attribution-reporting-register-os-source',
+		'attribution-reporting-register-os-trigger',
+	];
+	const headers = Object.fromEntries([['content-type', 'text/plain'], ...names.map(n => [n, '{}'])]);
+	const r = await fetchThrough('https://example.com/pixel', headers, 'ok');
+	for (const name of names) assert.equal(r.headers.get(name), null, name);
+});
