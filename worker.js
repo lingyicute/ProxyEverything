@@ -3068,7 +3068,7 @@ function documentBase(targetUrl) {
 // 剥除代理链路注入的宿主/客户端转发头，避免源站据此生成指向代理域的链接或产生协议重定向循环
 const STRIP_FORWARDED_HEADERS = new Set([
 	'x-real-ip', 'true-client-ip', 'forwarded',
-	'x-original-host', 'x-original-url', 'x-rewrite-url', 'x-client-ip', 'via',
+	'x-original-host', 'x-host', 'x-http-host-override', 'x-original-url', 'x-rewrite-url', 'x-client-ip', 'via',
 	'cdn-loop', 'x-real-port', 'x-scheme', 'x-forwarded-ssl', 'front-end-https', 'fastly-client-ip',
 ]);
 

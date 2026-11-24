@@ -31,10 +31,13 @@ test('legacy Proxy-Connection is removed from upstream responses', async t => {
 
 test('the shared upstream header builder drops the entire X-Forwarded family', () => {
 	const input = request();
-	for (const name of ['X-Forwarded-For', 'X-Forwarded-Host', 'X-Forwarded-Prefix', 'X-Forwarded-Uri']) {
+	for (const name of ['X-Forwarded-For', 'X-Forwarded-Host', 'X-Forwarded-Prefix', 'X-Forwarded-Uri',
+		'X-Host', 'X-HTTP-Host-Override']) {
 		input.headers.set(name, 'fixture');
 	}
 	const headers = buildUpstreamHeaders(input, origin, target, env);
 	assert.ok([...headers.keys()].every(name => !name.startsWith('x-forwarded-')));
+	assert.equal(headers.get('x-host'), null);
+	assert.equal(headers.get('x-http-host-override'), null);
 	assert.equal(headers.get('X-End-To-End'), 'retain');
 });
